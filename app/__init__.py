@@ -5,6 +5,7 @@ from app.config import Config
 from app.errors.handlers import register_error_handlers
 from app.middleware.request_context import register_request_context
 from app.observability.tracing import init_tracing
+from app.extensions.db import check_connection
 
 from app.routes.health_routes import health_bp
 from app.routes.auth_routes import auth_bp
@@ -27,6 +28,9 @@ def create_app(config=Config):
     init_tracing(app)
     register_request_context(app)
     register_error_handlers(app)
+
+    # Check and print database connection status on startup
+    check_connection()
 
     for bp in (health_bp, auth_bp, project_bp, workflow_bp, test_bp,
                approval_bp, agent_bp, governance_bp, dashboard_bp):

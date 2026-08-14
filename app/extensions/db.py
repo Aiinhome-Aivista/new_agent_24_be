@@ -9,17 +9,32 @@ _pool = None
 def init_pool():
     global _pool
     if _pool is None:
-        _pool = pooling.MySQLConnectionPool(
-            pool_name="tdd_pool",
-            pool_size=Config.MYSQL_POOL_SIZE,
-            host=Config.MYSQL_HOST,
-            port=Config.MYSQL_PORT,
-            database=Config.MYSQL_DATABASE,
-            user=Config.MYSQL_USER,
-            password=Config.MYSQL_PASSWORD,
-            autocommit=False,
-        )
+        print(f"[Database] Connecting to MySQL at {Config.MYSQL_HOST}:{Config.MYSQL_PORT} (DB: {Config.MYSQL_DATABASE}, User: {Config.MYSQL_USER})...")
+        try:
+            _pool = pooling.MySQLConnectionPool(
+                pool_name="tdd_pool",
+                pool_size=Config.MYSQL_POOL_SIZE,
+                host=Config.MYSQL_HOST,
+                port=Config.MYSQL_PORT,
+                database=Config.MYSQL_DATABASE,
+                user=Config.MYSQL_USER,
+                password=Config.MYSQL_PASSWORD,
+                autocommit=False,
+            )
+            print(f"[Database] Connection successful: connected to {Config.MYSQL_DATABASE} on {Config.MYSQL_HOST}:{Config.MYSQL_PORT}")
+        except Exception as e:
+            print(f"[Database] Connection failed ({Config.MYSQL_HOST}:{Config.MYSQL_PORT}): {e}")
+            raise e
     return _pool
+
+
+def check_connection():
+    """Verify database connection on application startup."""
+    try:
+        init_pool()
+        return True
+    except Exception:
+        return False
 
 
 def get_connection():
