@@ -19,12 +19,22 @@ def get_project_by_id(project_id):
     return query("SELECT * FROM projects WHERE id=%s", (project_id,), fetchone=True)
 
 
-def create_project(uuid, key_code, name, description, target_language="java", target_framework="junit5", coding_standard="checkstyle-google", created_by=None):
+def create_project(uuid, key_code, name, description, target_language="java", target_framework="junit5", coding_standard="checkstyle-google", created_by=None,
+                   git_repo_url=None, git_provider=None, git_branch="main", base_branch="main", tech_stack=None, build_tool=None,
+                   app_type="REST API / Microservice", deployment_target=None, testing_framework=None, integration_test_framework=None,
+                   mocking_library=None, target_coverage="80%", frontend_framework=None, backend_framework=None):
     return execute("""
         INSERT INTO projects
-        (uuid, key_code, name, description, target_language, target_framework, coding_standard, health, created_by)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, 'green', %s)
-    """, (uuid, key_code.upper().strip(), name.strip(), description, target_language, target_framework, coding_standard, created_by), return_id=True)
+        (uuid, key_code, name, description, target_language, target_framework, coding_standard, health, created_by,
+         git_repo_url, git_provider, git_branch, base_branch, tech_stack, build_tool, app_type, deployment_target,
+         testing_framework, integration_test_framework, mocking_library, target_coverage, frontend_framework, backend_framework)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, 'green', %s,
+                %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s)
+    """, (uuid, key_code.upper().strip(), name.strip(), description, target_language, target_framework, coding_standard, created_by,
+          git_repo_url, git_provider, git_branch, base_branch, tech_stack, build_tool, app_type, deployment_target,
+          testing_framework or target_framework, integration_test_framework, mocking_library, target_coverage,
+          frontend_framework, backend_framework), return_id=True)
 
 
 def list_stories(project_uuid=None):

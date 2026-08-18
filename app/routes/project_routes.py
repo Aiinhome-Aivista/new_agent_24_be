@@ -57,6 +57,21 @@ def add_project():
     target_framework = body.get("target_framework", "junit5").strip()
     coding_standard = body.get("coding_standard", "checkstyle-google").strip()
 
+    git_repo_url = body.get("git_repo_url", "").strip() or None
+    git_provider = body.get("git_provider", "github").strip()
+    git_branch = body.get("git_branch", "main").strip()
+    base_branch = body.get("base_branch", "main").strip()
+    tech_stack = body.get("tech_stack", "").strip() or None
+    build_tool = body.get("build_tool", "").strip() or None
+    app_type = body.get("app_type", "REST API / Microservice").strip()
+    deployment_target = body.get("deployment_target", "").strip() or None
+    testing_framework = body.get("testing_framework", target_framework).strip()
+    integration_test_framework = body.get("integration_test_framework", "").strip() or None
+    mocking_library = body.get("mocking_library", "").strip() or None
+    target_coverage = body.get("target_coverage", "80%").strip()
+    frontend_framework = body.get("frontend_framework", "").strip() or None
+    backend_framework = body.get("backend_framework", "").strip() or None
+
     if not key_code or not name:
         return fail("VALIDATION_ERROR", "Project key_code and name are required")
 
@@ -67,7 +82,21 @@ def add_project():
     project_uuid = str(_uuid.uuid4())
     project_id = create_project(
         project_uuid, key_code, name, description,
-        target_language, target_framework, coding_standard, g.user_id
+        target_language, target_framework, coding_standard, g.user_id,
+        git_repo_url=git_repo_url,
+        git_provider=git_provider,
+        git_branch=git_branch,
+        base_branch=base_branch,
+        tech_stack=tech_stack,
+        build_tool=build_tool,
+        app_type=app_type,
+        deployment_target=deployment_target,
+        testing_framework=testing_framework,
+        integration_test_framework=integration_test_framework,
+        mocking_library=mocking_library,
+        target_coverage=target_coverage,
+        frontend_framework=frontend_framework,
+        backend_framework=backend_framework
     )
 
     # Link creator as ARCHITECT / ADMIN
@@ -77,7 +106,7 @@ def add_project():
     """, (project_id, g.user_id))
 
     audit("project_creation", user_id=g.user_id, project_id=project_id, status="SUCCESS",
-          metadata={"key_code": key_code, "name": name})
+          metadata={"key_code": key_code, "name": name, "git_branch": git_branch, "tech_stack": tech_stack, "app_type": app_type})
 
     return ok({"project_id": project_id, "uuid": project_uuid, "key_code": key_code, "name": name},
               "Project created successfully", 201)
