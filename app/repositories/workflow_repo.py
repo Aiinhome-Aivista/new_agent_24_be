@@ -26,7 +26,12 @@ def update_run(workflow_id, status, stage, state, current_agent=None, error_code
 
 
 def get_run(workflow_id):
-    row = query("SELECT * FROM workflow_runs WHERE workflow_id=%s", (workflow_id,), fetchone=True)
+    row = query("""SELECT w.*, p.uuid AS project_uuid, p.name AS project_name, p.key_code AS project_key,
+                          s.title AS story_title, s.external_key AS story_key
+                   FROM workflow_runs w
+                   LEFT JOIN projects p ON p.id=w.project_id
+                   LEFT JOIN stories s ON s.id=w.story_id
+                   WHERE w.workflow_id=%s""", (workflow_id,), fetchone=True)
     if row and isinstance(row.get("state_json"), str):
         row["state_json"] = json.loads(row["state_json"] or "{}")
     return row
@@ -34,9 +39,18 @@ def get_run(workflow_id):
 
 def list_runs(project_uuid=None):
     if project_uuid:
-        return query("""SELECT w.* FROM workflow_runs w JOIN projects p ON p.id=w.project_id
+        return query("""SELECT w.*, p.uuid AS project_uuid, p.name AS project_name, p.key_code AS project_key,
+                               s.title AS story_title, s.external_key AS story_key
+                        FROM workflow_runs w
+                        LEFT JOIN projects p ON p.id=w.project_id
+                        LEFT JOIN stories s ON s.id=w.story_id
                         WHERE p.uuid=%s ORDER BY w.created_at DESC""", (project_uuid,))
-    return query("SELECT * FROM workflow_runs ORDER BY created_at DESC")
+    return query("""SELECT w.*, p.uuid AS project_uuid, p.name AS project_name, p.key_code AS project_key,
+                           s.title AS story_title, s.external_key AS story_key
+                    FROM workflow_runs w
+                    LEFT JOIN projects p ON p.id=w.project_id
+                    LEFT JOIN stories s ON s.id=w.story_id
+                    ORDER BY w.created_at DESC""")
 
 
 def record_agent_run(uuid, workflow_id, agent, task_type, model_name, tool_name,

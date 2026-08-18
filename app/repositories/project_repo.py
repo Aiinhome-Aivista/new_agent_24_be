@@ -39,16 +39,16 @@ def create_project(uuid, key_code, name, description, target_language="java", ta
 
 def list_stories(project_uuid=None):
     if project_uuid:
-        return query("""SELECT s.*, p.key_code AS project_key, p.name AS project_name
+        return query("""SELECT s.*, p.uuid AS project_uuid, p.key_code AS project_key, p.name AS project_name
                         FROM stories s JOIN projects p ON p.id=s.project_id
                         WHERE p.uuid=%s ORDER BY s.created_at DESC""", (project_uuid,))
-    return query("""SELECT s.*, p.key_code AS project_key, p.name AS project_name
+    return query("""SELECT s.*, p.uuid AS project_uuid, p.key_code AS project_key, p.name AS project_name
                     FROM stories s JOIN projects p ON p.id=s.project_id
                     ORDER BY s.created_at DESC""")
 
 
 def get_story(uuid):
-    return query("""SELECT s.*, p.key_code AS project_key, p.name AS project_name
+    return query("""SELECT s.*, p.uuid AS project_uuid, p.key_code AS project_key, p.name AS project_name
                     FROM stories s JOIN projects p ON p.id=s.project_id
                     WHERE s.uuid=%s""", (uuid,), fetchone=True)
 

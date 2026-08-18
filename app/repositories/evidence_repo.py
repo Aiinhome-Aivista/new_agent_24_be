@@ -38,13 +38,20 @@ def decide_approval(uuid, decision, approver_id, comment):
 
 
 def pending_approvals():
-    return query("""SELECT a.*, w.story_id, w.project_id FROM approvals a
+    return query("""SELECT a.*, w.story_id, w.project_id, p.uuid AS project_uuid, p.name AS project_name,
+                           p.key_code AS project_key, s.title AS story_title
+                    FROM approvals a
                     JOIN workflow_runs w ON w.workflow_id=a.workflow_id
+                    LEFT JOIN projects p ON p.id=w.project_id
+                    LEFT JOIN stories s ON s.id=w.story_id
                     WHERE a.decision='PENDING' ORDER BY a.requested_at ASC""")
 
 
 def approvals_for(workflow_id):
-    return query("SELECT * FROM approvals WHERE workflow_id=%s ORDER BY requested_at ASC", (workflow_id,))
+    return query("""SELECT a.*, u.name AS approver_name
+                    FROM approvals a
+                    LEFT JOIN users u ON u.id=a.approver_id
+                    WHERE a.workflow_id=%s ORDER BY a.requested_at ASC""", (workflow_id,))
 
 
 def find_alm_writeback(idempotency_key):

@@ -52,7 +52,8 @@ def start_workflow():
 @require_auth
 @require_permission("workflow.read")
 def workflows():
-    return ok({"workflows": list_runs()})
+    project_uuid = request.args.get("project")
+    return ok({"workflows": list_runs(project_uuid)})
 
 
 @workflow_bp.route("/workflows/<workflow_id>", methods=["GET"])
@@ -72,8 +73,14 @@ def workflow_status(workflow_id):
     run = get_run(workflow_id)
     if not run:
         return fail("NOT_FOUND", "Workflow not found", 404)
-    return ok({"workflow_id": workflow_id, "status": run["status"],
-               "current_stage": run["current_stage"], "current_agent": run["current_agent"]})
+    return ok({
+        "workflow_id": workflow_id,
+        "status": run["status"],
+        "current_stage": run["current_stage"],
+        "current_agent": run["current_agent"],
+        "project_uuid": run.get("project_uuid"),
+        "story_title": run.get("story_title"),
+    })
 
 
 @workflow_bp.route("/agent-runs", methods=["GET"])
