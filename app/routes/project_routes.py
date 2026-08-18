@@ -37,11 +37,20 @@ def project_detail(uuid):
     p = get_project(uuid)
     if not p:
         return fail("NOT_FOUND", "Project not found", 404)
+    workflows = query("""
+        SELECT w.workflow_id, w.status, w.current_stage, w.current_agent, w.created_at,
+               s.title AS story_title, s.external_key AS story_key
+        FROM workflow_runs w
+        JOIN stories s ON s.id=w.story_id
+        WHERE w.project_id=%s
+        ORDER BY w.created_at DESC
+    """, (p["id"],))
     return ok({
         "project": p,
         "stories": list_stories(uuid),
         "knowledge": list_knowledge_documents(p["id"]),
-        "contracts": list_services_and_contracts(p["id"])
+        "contracts": list_services_and_contracts(p["id"]),
+        "workflows": workflows or []
     })
 
 
