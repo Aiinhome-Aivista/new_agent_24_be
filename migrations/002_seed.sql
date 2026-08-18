@@ -47,7 +47,7 @@ SELECT r.id, p.id FROM roles r JOIN permissions p ON r.code = 'ADMIN';
 INSERT IGNORE INTO role_permissions (role_id, permission_id)
 SELECT r.id, p.id FROM roles r JOIN permissions p
   ON r.code = 'DEVELOPER' AND p.code IN
-  ('project.read','story.read','story.write','workflow.create','workflow.read','test.review','knowledge.write');
+  ('project.read','project.write','story.read','story.write','workflow.create','workflow.read','test.review','knowledge.write');
 
 -- REVIEWER
 INSERT IGNORE INTO role_permissions (role_id, permission_id)
@@ -65,7 +65,7 @@ SELECT r.id, p.id FROM roles r JOIN permissions p
 INSERT IGNORE INTO role_permissions (role_id, permission_id)
 SELECT r.id, p.id FROM roles r JOIN permissions p
   ON r.code = 'QA_ENGINEER' AND p.code IN
-  ('project.read','story.read','workflow.create','workflow.read','test.review');
+  ('project.read','project.write','story.read','workflow.create','workflow.read','test.review');
 
 -- ARCHITECT
 INSERT IGNORE INTO role_permissions (role_id, permission_id)
@@ -168,12 +168,12 @@ FROM services sv WHERE sv.name='AuthorizationService';
 
 -- ---------- Default model configuration (Gemini) ----------
 INSERT INTO model_configurations (uuid, task_type, provider, model_name, temperature, max_tokens, timeout_s, is_active) VALUES
-  (UUID(), 'requirement_analysis', 'gemini', 'gemini-1.5-pro',   0.20, 2048, 60, 1),
-  (UUID(), 'service_planning',     'gemini', 'gemini-1.5-pro',   0.20, 2048, 60, 1),
-  (UUID(), 'test_generation',      'gemini', 'gemini-1.5-pro',   0.30, 4096, 90, 1),
-  (UUID(), 'code_generation',      'gemini', 'gemini-1.5-pro',   0.20, 4096, 90, 1),
-  (UUID(), 'evidence_narrative',   'gemini', 'gemini-1.5-flash', 0.20, 2048, 60, 1),
-  (UUID(), 'explanation',          'gemini', 'gemini-1.5-flash', 0.30, 1024, 45, 1)
+  (UUID(), 'requirement_analysis', 'gemini', 'gemini-3.1-flash-lite', 0.20, 2048, 60, 1),
+  (UUID(), 'service_planning',     'gemini', 'gemini-3.1-flash-lite', 0.20, 2048, 60, 1),
+  (UUID(), 'test_generation',      'gemini', 'gemini-3.1-flash-lite', 0.30, 4096, 90, 1),
+  (UUID(), 'code_generation',      'gemini', 'gemini-3.1-flash-lite', 0.20, 4096, 90, 1),
+  (UUID(), 'evidence_narrative',   'gemini', 'gemini-3.1-flash-lite', 0.20, 2048, 60, 1),
+  (UUID(), 'explanation',          'gemini', 'gemini-3.1-flash-lite', 0.30, 1024, 45, 1)
 ON DUPLICATE KEY UPDATE model_name = VALUES(model_name);
 
 -- ---------- Active prompt set ----------

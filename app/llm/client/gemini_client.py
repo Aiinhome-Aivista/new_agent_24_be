@@ -30,29 +30,54 @@ class MockGeminiClient:
                          {"prompt_tokens": len(prompt.split()), "completion_tokens": 0}, True)
 
 
+MODEL_ALIASES = {
+    "gemini-1.5-pro": "gemini-3.1-flash-lite",
+    "gemini-1.5-flash": "gemini-3.1-flash-lite",
+    "gemini-1.5-flash-latest": "gemini-3.1-flash-lite",
+    "gemini-1.0-pro": "gemini-3.1-flash-lite",
+    "gemini-2.5-pro": "gemini-3.1-flash-lite",
+    "gemini-2.5-flash": "gemini-3.1-flash-lite",
+}
+
+
 class GeminiClient:
     def __init__(self, api_key):
-        from google import genai  # imported lazily so mock mode needs no dependency
-        self._client = genai.Client(api_key=api_key)
-        self._mock = MockGeminiClient()
+        try:
+            # pyrefly: ignore [missing-import]
+            from google import genai  # imported lazily so mock mode needs no dependency
+            self._client = genai.Client(api_key=api_key.strip() if api_key else "")
+            self._mock = MockGeminiClient()
+        except Exception as e:
+            print(f"[GeminiClient] Failed to initialize Google GenAI SDK ({e}) — using Mock adapter.")
+            self._client = None
+            self._mock = MockGeminiClient()
 
     def generate(self, *, model, system, prompt, temperature, max_tokens, as_json=False):
+        # Normalize model name if alias exists
+        actual_model = MODEL_ALIASES.get(model, model)
+        if actual_model.startswith("models/"):
+            actual_model = actual_model.replace("models/", "")
+
+        if self._client is None:
+            return self._mock.generate(model=actual_model, system=system, prompt=prompt,
+                                       temperature=temperature, max_tokens=max_tokens, as_json=as_json)
+
         try:
             start = time.time()
             contents = f"{system}\n\n{prompt}" if system else prompt
             config = {"temperature": temperature, "max_output_tokens": max_tokens}
             if as_json:
                 config["response_mime_type"] = "application/json"
-            resp = self._client.models.generate_content(model=model, contents=contents, config=config)
+            resp = self._client.models.generate_content(model=actual_model, contents=contents, config=config)
             usage = getattr(resp, "usage_metadata", None)
             token_usage = {
                 "prompt_tokens": getattr(usage, "prompt_token_count", None) if usage else None,
                 "completion_tokens": getattr(usage, "candidates_token_count", None) if usage else None,
             }
-            return LLMResult(resp.text, model, int((time.time() - start) * 1000), token_usage, False)
+            return LLMResult(resp.text, actual_model, int((time.time() - start) * 1000), token_usage, False)
         except Exception as e:
-            print(f"[GeminiClient] Live call failed ({e}) — falling back to deterministic mock adapter.")
-            return self._mock.generate(model=model, system=system, prompt=prompt,
+            print(f"[GeminiClient] Live call failed with model '{actual_model}' ({e}) — falling back to deterministic mock adapter.")
+            return self._mock.generate(model=actual_model, system=system, prompt=prompt,
                                        temperature=temperature, max_tokens=max_tokens, as_json=as_json)
 
 

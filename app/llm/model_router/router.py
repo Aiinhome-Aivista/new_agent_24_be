@@ -3,16 +3,19 @@ ModelRouter: single abstraction between agents and the LLM provider.
 Agents call generate_structured / generate_text / generate_code — never Gemini directly.
 Per-task model config is read from the model_configurations table (falls back to defaults).
 """
+from app.config import Config
 from app.llm.client.gemini_client import build_client
 from app.extensions.db import query
 
+_DEFAULT_MODEL = getattr(Config, "GEMINI_MODEL", "gemini-3.1-flash-lite") or "gemini-3.1-flash-lite"
+
 _DEFAULTS = {
-    "requirement_analysis": ("gemini-1.5-pro", 0.2, 2048),
-    "service_planning":     ("gemini-1.5-pro", 0.2, 2048),
-    "test_generation":      ("gemini-1.5-pro", 0.3, 4096),
-    "code_generation":      ("gemini-1.5-pro", 0.2, 4096),
-    "evidence_narrative":   ("gemini-1.5-flash", 0.2, 2048),
-    "explanation":          ("gemini-1.5-flash", 0.3, 1024),
+    "requirement_analysis": (_DEFAULT_MODEL, 0.2, 2048),
+    "service_planning":     (_DEFAULT_MODEL, 0.2, 2048),
+    "test_generation":      (_DEFAULT_MODEL, 0.3, 4096),
+    "code_generation":      (_DEFAULT_MODEL, 0.2, 4096),
+    "evidence_narrative":   (_DEFAULT_MODEL, 0.2, 2048),
+    "explanation":          (_DEFAULT_MODEL, 0.3, 1024),
 }
 
 
