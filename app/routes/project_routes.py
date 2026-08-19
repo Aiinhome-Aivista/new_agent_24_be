@@ -15,6 +15,7 @@ from app.rag.ingestion.indexer import ingest_document, delete_document
 from app.rag.retrieval.retriever import get_retriever
 from app.audit.audit_log import record as audit
 from app.extensions.db import query
+from app.tools.repository import validate_git_connection
 
 project_bp = Blueprint("projects", __name__)
 
@@ -119,6 +120,43 @@ def add_project():
 
     return ok({"project_id": project_id, "uuid": project_uuid, "key_code": key_code, "name": name},
               "Project created successfully", 201)
+
+
+@project_bp.route("/projects/test-git-connection", methods=["POST"])
+@require_auth
+def test_git_connection_adhoc():
+    """Test connectivity to any Git repository / branch before or after creating a project."""
+    body = request.get_json(silent=True) or {}
+    git_repo_url = body.get("git_repo_url", "").strip()
+    git_branch = body.get("git_branch", "main").strip() or "main"
+    git_provider = body.get("git_provider", "github").strip() or "github"
+    token = body.get("token", "").strip() or None
+
+    result = validate_git_connection(git_repo_url, git_branch=git_branch, git_provider=git_provider, token=token)
+    audit("git_connection_test", user_id=g.user_id, status="SUCCESS" if result.get("connected") else "FAILED",
+          metadata={"git_repo_url": git_repo_url, "git_branch": git_branch, "result_status": result.get("status")})
+    return ok(result)
+
+
+@project_bp.route("/projects/<uuid>/test-git-connection", methods=["POST"])
+@require_auth
+@require_permission("project.read")
+def test_project_git_connection(uuid):
+    """Test Git connectivity for an existing project workspace."""
+    p = get_project(uuid)
+    if not p:
+        return fail("NOT_FOUND", "Project not found", 404)
+
+    body = request.get_json(silent=True) or {}
+    git_repo_url = body.get("git_repo_url") or p.get("git_repo_url")
+    git_branch = body.get("git_branch") or p.get("git_branch") or "main"
+    git_provider = body.get("git_provider") or p.get("git_provider") or "github"
+    token = body.get("token", "").strip() or None
+
+    result = validate_git_connection(git_repo_url, git_branch=git_branch, git_provider=git_provider, token=token)
+    audit("git_connection_test", user_id=g.user_id, project_id=p["id"], status="SUCCESS" if result.get("connected") else "FAILED",
+          metadata={"git_repo_url": git_repo_url, "git_branch": git_branch, "result_status": result.get("status")})
+    return ok(result)
 
 
 # -----------------------------------------------------------------------------
