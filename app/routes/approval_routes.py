@@ -40,7 +40,13 @@ def decide(uuid):
 
     approval = query("SELECT * FROM approvals WHERE uuid=%s", (uuid,), fetchone=True)
     if not approval:
+        # Fallback: check if uuid was provided as workflow_id
+        approval = query("SELECT * FROM approvals WHERE workflow_id=%s AND decision='PENDING' ORDER BY requested_at DESC LIMIT 1", (uuid,), fetchone=True)
+        if approval:
+            uuid = approval["uuid"]
+    if not approval:
         return fail("NOT_FOUND", "Approval not found", 404)
+
 
     decide_approval(uuid, decision, g.user_id, comment)
     audit("approval", user_id=g.user_id, workflow_id=approval["workflow_id"],
