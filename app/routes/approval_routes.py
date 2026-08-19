@@ -58,4 +58,16 @@ def decide(uuid):
 @require_auth
 @require_permission("workflow.read")
 def evidence(workflow_id):
-    return ok({"evidence": list_evidence(workflow_id)})
+    import os
+    evs = list_evidence(workflow_id)
+    for e in evs:
+        if e.get("file_path") and os.path.isfile(e["file_path"]):
+            try:
+                with open(e["file_path"], "r", encoding="utf-8") as f:
+                    e["content"] = f.read()
+            except Exception:
+                e["content"] = e.get("narrative") or ""
+        else:
+            e["content"] = e.get("narrative") or ""
+    return ok({"evidence": evs})
+

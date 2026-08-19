@@ -1,7 +1,7 @@
 from flask import Blueprint, request
 from app.errors.handlers import ok, fail
 from app.auth.decorators import require_auth, require_permission
-from app.repositories.test_repo import list_test_cases, set_test_status, list_executions
+from app.repositories.test_repo import list_test_cases, set_test_status, list_executions, list_code_quality
 
 test_bp = Blueprint("tests", __name__)
 
@@ -30,3 +30,11 @@ def update_test_status(uuid):
 @require_permission("workflow.read")
 def executions(workflow_id):
     return ok({"executions": list_executions(workflow_id)})
+
+
+@test_bp.route("/workflows/<workflow_id>/code-quality", methods=["GET"])
+@require_auth
+@require_permission("workflow.read")
+def code_quality(workflow_id):
+    return ok({"code_quality": list_code_quality(workflow_id)})
+

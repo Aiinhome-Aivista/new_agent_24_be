@@ -53,7 +53,28 @@ def save_raw_response(result_id, status_code, headers, body, raw_ref):
 
 
 def list_executions(workflow_id):
-    return query("SELECT * FROM execution_runs WHERE workflow_id=%s ORDER BY created_at DESC", (workflow_id,))
+    runs = query("SELECT * FROM execution_runs WHERE workflow_id=%s ORDER BY created_at DESC", (workflow_id,))
+    if not runs:
+        return []
+    for r in runs:
+        results = query("""
+            SELECT r.*,
+                   req.method, req.url, req.headers AS req_headers, req.body AS req_body,
+                   resp.status_code AS resp_status, resp.headers AS resp_headers, resp.body AS resp_body
+            FROM execution_results r
+            LEFT JOIN api_requests req ON req.execution_result_id = r.id
+            LEFT JOIN api_responses resp ON resp.execution_result_id = r.id
+            WHERE r.execution_run_id = %s
+            ORDER BY r.id ASC
+        """, (r["id"],))
+        for res in results:
+            if isinstance(res.get("assertions"), str):
+                try:
+                    res["assertions"] = json.loads(res["assertions"])
+                except Exception:
+                    res["assertions"] = []
+        r["results"] = results or []
+    return runs
 
 
 def create_code_quality_run(uuid, workflow_id, analyzer, score, passed, is_mock):
@@ -68,3 +89,14 @@ def add_code_quality_issue(run_id, severity, rule, file, line, description, reme
         (code_quality_run_id, severity, rule, file, line, description, remediation)
         VALUES (%s,%s,%s,%s,%s,%s,%s)""",
         (run_id, severity, rule, file, line, description, remediation))
+
+
+def list_code_quality(workflow_id):
+    runs = query("SELECT * FROM code_quality_runs WHERE workflow_id=%s ORDER BY created_at DESC", (workflow_id,))
+    if not runs:
+        return []
+    for r in runs:
+        issues = query("SELECT * FROM code_quality_issues WHERE code_quality_run_id=%s ORDER BY id ASC", (r["id"],))
+        r["issues"] = issues or []
+    return runs
+
