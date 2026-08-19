@@ -70,3 +70,7 @@ class Config:
 
     # Workflow
     WORKFLOW_MAX_RETRIES = int(os.getenv("WORKFLOW_MAX_RETRIES", "3"))
+
+    # Git workspace
+    GIT_WORKSPACE_ROOT = os.getenv("GIT_WORKSPACE_ROOT", "./workspaces")
+

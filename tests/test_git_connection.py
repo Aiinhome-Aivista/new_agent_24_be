@@ -12,9 +12,12 @@ def auth_headers(client):
 
 
 def test_parse_github_url():
-    assert parse_github_url("https://github.com/torvalds/linux") == ("torvalds", "linux")
-    assert parse_github_url("https://github.com/torvalds/linux.git") == ("torvalds", "linux")
-    assert parse_github_url("git@github.com:torvalds/linux.git") == ("torvalds", "linux")
+    assert parse_github_url("https://github.com/torvalds/linux") == ("torvalds", "linux", None)
+    assert parse_github_url("https://github.com/torvalds/linux.git") == ("torvalds", "linux", None)
+    assert parse_github_url("git@github.com:torvalds/linux.git") == ("torvalds", "linux", None)
+    assert parse_github_url("https://github_pat_1234567890abcdef@github.com/torvalds/linux.git") == (
+        "torvalds", "linux", "github_pat_1234567890abcdef"
+    )
     assert parse_github_url("https://not-github.com/foo/bar") is None
     assert parse_github_url("") is None
 
