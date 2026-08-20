@@ -166,6 +166,17 @@ def workflow_status(workflow_id):
     })
 
 
+@workflow_bp.route("/workflows/<workflow_id>/sla", methods=["GET"])
+@require_auth
+@require_permission("workflow.read")
+def workflow_sla(workflow_id):
+    from app.services.sla_service import evaluate_workflow_sla
+    sla_data = evaluate_workflow_sla(workflow_id)
+    if not sla_data:
+        return fail("NOT_FOUND", "Workflow not found", 404)
+    return ok({"sla": sla_data})
+
+
 @workflow_bp.route("/agent-runs", methods=["GET"])
 @require_auth
 @require_permission("workflow.read")

@@ -83,3 +83,91 @@ def evidence(workflow_id):
             e["content"] = e.get("narrative") or ""
     return ok({"evidence": evs})
 
+
+@approval_bp.route("/workflows/<workflow_id>/evidence/download", methods=["GET"])
+@require_auth
+@require_permission("workflow.read")
+def download_evidence(workflow_id):
+    import os
+    from flask import send_file, Response
+    fmt = request.args.get("format", "html").lower()
+    evs = list_evidence(workflow_id)
+    if not evs:
+        return fail("NOT_FOUND", "No evidence artifacts found for this workflow", 404)
+
+    latest = evs[-1]
+    base_file = latest.get("file_path") or ""
+    key = latest.get("evidence_key") or f"EVID-{workflow_id[:8]}"
+
+    if fmt == "html":
+        html_file = base_file.replace(".md", ".html")
+        if os.path.isfile(html_file):
+            return send_file(html_file, mimetype="text/html", as_attachment=True, download_name=f"{key}.html")
+        # Generate on the fly if needed
+        run = get_run(workflow_id)
+        from app.repositories.test_repo import list_test_cases, get_execution_run, get_code_quality_run
+        from app.tools.document_generator.generator import render_evidence_html
+        content = render_evidence_html(
+            key,
+            (run.get("state_json") or {}).get("story") or {},
+            list_test_cases(workflow_id),
+            get_execution_run(workflow_id),
+            get_code_quality_run(workflow_id),
+            latest.get("narrative", ""),
+            latest.get("checksum_sha256", "")
+        )
+        return Response(content, mimetype="text/html", headers={"Content-Disposition": f"attachment; filename={key}.html"})
+
+    elif fmt == "json":
+        import json as _json
+        run = get_run(workflow_id)
+        from app.repositories.test_repo import list_test_cases, get_execution_run, get_code_quality_run
+        bundle = {
+            "evidence_key": key,
+            "workflow_id": workflow_id,
+            "checksum_sha256": latest.get("checksum_sha256"),
+            "story": (run.get("state_json") or {}).get("story") or {},
+            "test_cases": list_test_cases(workflow_id),
+            "execution": get_execution_run(workflow_id),
+            "code_quality": get_code_quality_run(workflow_id),
+            "narrative": latest.get("narrative"),
+            "generated_at": latest.get("created_at"),
+        }
+        return Response(_json.dumps(bundle, indent=2, default=str), mimetype="application/json",
+                        headers={"Content-Disposition": f"attachment; filename={key}-bundle.json"})
+    else:
+        # Default markdown
+        if os.path.isfile(base_file):
+            return send_file(base_file, mimetype="text/markdown", as_attachment=True, download_name=f"{key}.md")
+        return Response(latest.get("narrative") or "Evidence file not found", mimetype="text/markdown",
+                        headers={"Content-Disposition": f"attachment; filename={key}.md"})
+
+
+@approval_bp.route("/workflows/<workflow_id>/alm-preview", methods=["GET"])
+@require_auth
+@require_permission("workflow.read")
+def alm_preview(workflow_id):
+    from app.tools.alm.adapter import generate_alm_payload
+    from app.repositories.test_repo import get_execution_run, get_code_quality_run
+    provider = request.args.get("provider", "azure_devops")
+    run = get_run(workflow_id)
+    if not run:
+        return fail("NOT_FOUND", "Workflow not found", 404)
+
+    evs = list_evidence(workflow_id)
+    latest = evs[-1] if evs else {}
+    evidence_key = latest.get("evidence_key") or f"EVID-{workflow_id[:8]}"
+    story_key = run.get("story_key") or "STORY-101"
+    narrative = latest.get("narrative") or "TDD Verification and execution logs."
+
+    preview = generate_alm_payload(
+        provider,
+        story_key,
+        evidence_key,
+        narrative,
+        get_execution_run(workflow_id),
+        get_code_quality_run(workflow_id)
+    )
+    return ok({"preview": preview})
+
+

@@ -402,54 +402,101 @@ def upload_collection(project_uuid):
         return fail("NOT_FOUND", "Project not found", 404)
 
     if "file" not in request.files:
-        return fail("VALIDATION_ERROR", "Postman / Bruno JSON file required")
+        return fail("VALIDATION_ERROR", "Postman (.json) or Bruno (.bru / .json) file required")
 
     file = request.files["file"]
-    try:
-        data = json.loads(file.read().decode("utf-8"))
-    except Exception as e:
-        return fail("INVALID_JSON", f"Could not parse collection JSON: {e}")
+    filename = file.filename or "collection"
+    raw_bytes = file.read()
+    raw_text = raw_bytes.decode("utf-8", errors="replace")
 
-    # Ingest collection as knowledge document as well
-    ingest_document(
-        project_id=project["id"],
-        file_name=file.filename,
-        content_bytes=json.dumps(data).encode("utf-8"),
-        doc_type="postman_collection" if "_postman_id" in data.get("info", {}) else "api_contract",
-        uploaded_by=g.user_id
-    )
-
-    # Extract items into services and api_contracts
     contracts_created = 0
-    service_name = data.get("info", {}).get("name", "ImportedService")
-    service = query("SELECT * FROM services WHERE project_id=%s AND name=%s", (project["id"], service_name), fetchone=True)
-    if not service:
-        service_id = create_service(str(_uuid.uuid4()), project["id"], service_name, "Imported from collection")
+    service_name = "ImportedService"
+    data = None
+
+    # Check if JSON (Postman or Bruno JSON export)
+    try:
+        data = json.loads(raw_text)
+    except Exception:
+        data = None
+
+    if data and isinstance(data, dict):
+        # Postman / Standard Collection JSON
+        doc_type = "postman_collection" if "_postman_id" in data.get("info", {}) else "api_contract"
+        service_name = data.get("info", {}).get("name", filename.replace(".json", ""))
+
+        ingest_document(
+            project_id=project["id"],
+            file_name=filename,
+            content_bytes=raw_bytes,
+            doc_type=doc_type,
+            uploaded_by=g.user_id
+        )
+
+        service = query("SELECT * FROM services WHERE project_id=%s AND name=%s", (project["id"], service_name), fetchone=True)
+        service_id = service["id"] if service else create_service(str(_uuid.uuid4()), project["id"], service_name, "Imported from collection")
+
+        def extract_requests(items):
+            nonlocal contracts_created
+            for it in items:
+                if "item" in it:
+                    extract_requests(it["item"])
+                elif "request" in it:
+                    req = it["request"]
+                    method = req.get("method", "GET").upper()
+                    url = req.get("url", {})
+                    raw_path = url.get("raw") if isinstance(url, dict) else str(url)
+                    body = req.get("body", {})
+                    req_schema = {}
+                    if body.get("raw"):
+                        try:
+                            req_schema = json.loads(body["raw"])
+                        except Exception:
+                            req_schema = {"raw": body["raw"]}
+                    create_api_contract(str(_uuid.uuid4()), service_id, method, raw_path, req_schema, {})
+                    contracts_created += 1
+
+        if "item" in data:
+            extract_requests(data["item"])
+
     else:
-        service_id = service["id"]
+        # Bruno (.bru) Text File Parser
+        import re
+        service_name = filename.replace(".bru", "").replace("_", " ").title()
+        
+        ingest_document(
+            project_id=project["id"],
+            file_name=filename,
+            content_bytes=raw_bytes,
+            doc_type="bruno_collection",
+            uploaded_by=g.user_id
+        )
 
-    def extract_requests(items):
-        nonlocal contracts_created
-        for it in items:
-            if "item" in it:
-                extract_requests(it["item"])
-            elif "request" in it:
-                req = it["request"]
-                method = req.get("method", "GET").upper()
-                url = req.get("url", {})
-                raw_path = url.get("raw") if isinstance(url, dict) else str(url)
-                body = req.get("body", {})
-                req_schema = {}
-                if body.get("raw"):
-                    try:
-                        req_schema = json.loads(body["raw"])
-                    except Exception:
-                        req_schema = {"raw": body["raw"]}
-                create_api_contract(str(_uuid.uuid4()), service_id, method, raw_path, req_schema, {})
-                contracts_created += 1
+        service = query("SELECT * FROM services WHERE project_id=%s AND name=%s", (project["id"], service_name), fetchone=True)
+        service_id = service["id"] if service else create_service(str(_uuid.uuid4()), project["id"], service_name, "Imported from Bruno collection")
 
-    if "item" in data:
-        extract_requests(data["item"])
+        # Regex match HTTP method block: get { url: ... }, post { url: ... }
+        method_match = re.search(r"(get|post|put|delete|patch|options|head)\s*\{([^}]+)\}", raw_text, re.IGNORECASE)
+        if method_match:
+            method = method_match.group(1).upper()
+            block_content = method_match.group(2)
+            url_match = re.search(r"url:\s*(\S+)", block_content)
+            raw_path = url_match.group(1) if url_match else "/api/resource"
 
-    return ok({"service": service_name, "contracts_created": contracts_created},
-              f"Successfully imported {contracts_created} API contract(s) from collection", 201)
+            req_schema = {}
+            body_match = re.search(r"body:json\s*\{([\s\S]+?)\}\s*(?:$|\n\w)", raw_text)
+            if body_match:
+                try:
+                    req_schema = json.loads(body_match.group(1).strip())
+                except Exception:
+                    req_schema = {"raw": body_match.group(1).strip()}
+
+            create_api_contract(str(_uuid.uuid4()), service_id, method, raw_path, req_schema, {})
+            contracts_created += 1
+        else:
+            # Fallback: extract generic REST endpoint from filename
+            endpoint_slug = filename.replace(".bru", "").replace(".txt", "").lower()
+            create_api_contract(str(_uuid.uuid4()), service_id, "GET", f"/api/{endpoint_slug}", {}, {})
+            contracts_created += 1
+
+    return ok({"service": service_name, "contracts_created": contracts_created, "format": "bruno" if filename.endswith(".bru") else "postman"},
+              f"Successfully imported {contracts_created} API contract(s) from {filename}", 201)
