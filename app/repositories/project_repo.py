@@ -38,17 +38,21 @@ def create_project(uuid, key_code, name, description, target_language="java", ta
 
 
 def list_stories(project_uuid=None):
+    base_sql = """SELECT s.*, p.uuid AS project_uuid, p.key_code AS project_key, p.name AS project_name,
+                         (SELECT w.workflow_id FROM workflow_runs w WHERE w.story_id=s.id ORDER BY w.created_at DESC LIMIT 1) AS workflow_id,
+                         (SELECT w.status FROM workflow_runs w WHERE w.story_id=s.id ORDER BY w.created_at DESC LIMIT 1) AS workflow_status,
+                         (SELECT w.current_stage FROM workflow_runs w WHERE w.story_id=s.id ORDER BY w.created_at DESC LIMIT 1) AS workflow_stage
+                  FROM stories s JOIN projects p ON p.id=s.project_id"""
     if project_uuid:
-        return query("""SELECT s.*, p.uuid AS project_uuid, p.key_code AS project_key, p.name AS project_name
-                        FROM stories s JOIN projects p ON p.id=s.project_id
-                        WHERE p.uuid=%s ORDER BY s.created_at DESC""", (project_uuid,))
-    return query("""SELECT s.*, p.uuid AS project_uuid, p.key_code AS project_key, p.name AS project_name
-                    FROM stories s JOIN projects p ON p.id=s.project_id
-                    ORDER BY s.created_at DESC""")
+        return query(base_sql + " WHERE p.uuid=%s ORDER BY s.created_at DESC", (project_uuid,))
+    return query(base_sql + " ORDER BY s.created_at DESC")
 
 
 def get_story(uuid):
-    return query("""SELECT s.*, p.uuid AS project_uuid, p.key_code AS project_key, p.name AS project_name
+    return query("""SELECT s.*, p.uuid AS project_uuid, p.key_code AS project_key, p.name AS project_name,
+                           (SELECT w.workflow_id FROM workflow_runs w WHERE w.story_id=s.id ORDER BY w.created_at DESC LIMIT 1) AS workflow_id,
+                           (SELECT w.status FROM workflow_runs w WHERE w.story_id=s.id ORDER BY w.created_at DESC LIMIT 1) AS workflow_status,
+                           (SELECT w.current_stage FROM workflow_runs w WHERE w.story_id=s.id ORDER BY w.created_at DESC LIMIT 1) AS workflow_stage
                     FROM stories s JOIN projects p ON p.id=s.project_id
                     WHERE s.uuid=%s""", (uuid,), fetchone=True)
 

@@ -23,6 +23,11 @@ def start_workflow():
     if not story:
         return fail("VALIDATION_ERROR", "Valid story_uuid is required")
 
+    # Prevent duplicate workflow creation for the same story
+    existing_wf = query("SELECT workflow_id, status, current_stage FROM workflow_runs WHERE story_id=%s ORDER BY created_at DESC LIMIT 1", (story["id"],), fetchone=True)
+    if existing_wf:
+        return fail("CONFLICT", f"A workflow already exists for this story (Workflow ID: {existing_wf['workflow_id']})", 409, details={"existing_workflow_id": existing_wf["workflow_id"], "status": existing_wf["status"]})
+
     project = query("SELECT * FROM projects WHERE id=%s", (story["project_id"],), fetchone=True)
     acs = story_acceptance_criteria(story["id"])
     contracts = query("""SELECT c.method, c.path, s.name AS service FROM api_contracts c
