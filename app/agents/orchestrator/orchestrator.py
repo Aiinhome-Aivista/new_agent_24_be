@@ -90,9 +90,9 @@ class Orchestrator:
         stage_to_approval = {
             sm.TEST_REVIEW: "TEST_REVIEW",
             sm.EVIDENCE_REVIEW: "EVIDENCE_REVIEW",
-            sm.ALM_APPROVAL: "ALM_ATTACHMENT",
+            sm.ALM_APPROVAL: "ALM_APPROVAL",
         }
-        create_approval(str(uuid.uuid4()), workflow_id, stage_to_approval[stage])
+        create_approval(str(uuid.uuid4()), workflow_id, stage_to_approval.get(stage, stage))
         state["status"] = STAGE_STATUS[stage]
         audit("workflow_transition", workflow_id=workflow_id, agent=self.name,
               status=state["status"], metadata={"checkpoint": stage})

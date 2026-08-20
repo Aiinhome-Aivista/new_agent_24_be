@@ -30,9 +30,40 @@ def start_workflow():
 
     project = query("SELECT * FROM projects WHERE id=%s", (story["project_id"],), fetchone=True)
     acs = story_acceptance_criteria(story["id"])
+    
+    # If no criteria in DB table, extract from story description/title so analysis does not get blocked
+    if not acs:
+        desc = story.get("description", "") or ""
+        extracted = []
+        if desc:
+            lines = [line.strip().lstrip("-*•1234567890. ") for line in desc.split("\n") if line.strip()]
+            for l in lines:
+                if len(l) > 10 and not l.startswith("#") and not l.lower().startswith("user story"):
+                    extracted.append({"text": l})
+        if not extracted:
+            extracted = [
+                {"text": f"Given valid request parameters, when {story.get('title', 'feature')} is executed, then return success status and valid payload."},
+                {"text": f"Given invalid or missing input parameters, when {story.get('title', 'feature')} is requested, then reject with validation error."},
+                {"text": f"Ensure boundary handling, security constraints, and robust error management for {story.get('title', 'feature')}."}
+            ]
+        acs = extracted
+
     contracts = query("""SELECT c.method, c.path, s.name AS service FROM api_contracts c
                          JOIN services s ON s.id=c.service_id WHERE s.project_id=%s""",
                       (story["project_id"],))
+
+    # If no explicit contracts in DB, derive REST endpoints for this story
+    if not contracts:
+        story_title = story.get("title", "resource")
+        clean_name = "".join(c for c in story_title if c.isalnum() or c in " -_").strip()
+        endpoint_slug = clean_name.lower().replace(" ", "-") or "api-endpoint"
+        service_name = (project or {}).get("name", "CoreService")
+        contracts = [
+            {"service": service_name, "method": "GET", "path": f"/api/{endpoint_slug}"},
+            {"service": service_name, "method": "POST", "path": f"/api/{endpoint_slug}"},
+            {"service": service_name, "method": "PUT", "path": f"/api/{endpoint_slug}/{{id}}"},
+            {"service": service_name, "method": "DELETE", "path": f"/api/{endpoint_slug}/{{id}}"},
+        ]
 
     workflow_id = str(_uuid.uuid4())
     state = {

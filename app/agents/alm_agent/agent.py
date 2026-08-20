@@ -13,15 +13,18 @@ class AlmAgent(BaseAgent):
     name = "alm_agent"
 
     def run(self, workflow_id, state):
-        approved = any(a["stage"] == "ALM_ATTACHMENT" and a["decision"] == "APPROVED"
+        approved = any(a["stage"] in ("ALM_ATTACHMENT", "ALM_APPROVAL") and a["decision"] == "APPROVED"
                        for a in approvals_for(workflow_id))
         evidence_row = latest_evidence_row(workflow_id)
         evidence_key = (evidence_row or {}).get("evidence_key") or state.get("evidence", {}).get("evidence_key", "")
+        if not evidence_key:
+            evidence_key = f"EVID-{uuid.uuid4().hex[:8]}"
         idempotency_key = f"{workflow_id}:{evidence_key}"
 
         ok, detail = check_alm(approved, idempotency_key, workflow_id)
         if not ok:
-            state["status"] = ALM_APPROVAL
+            from app.workflows.state_machine import WAITING_FOR_APPROVAL
+            state["status"] = WAITING_FOR_APPROVAL
             state.setdefault("errors", []).append({"agent": self.name, "message": detail})
             return state
 

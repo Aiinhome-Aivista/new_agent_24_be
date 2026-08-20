@@ -10,8 +10,12 @@ from app.extensions.db import query
 
 approval_bp = Blueprint("approvals", __name__)
 
-_STAGE_MAP = {"TEST_REVIEW": "TEST_REVIEW", "EVIDENCE_REVIEW": "EVIDENCE_REVIEW",
-              "ALM_ATTACHMENT": "ALM_APPROVAL"}
+_STAGE_MAP = {
+    "TEST_REVIEW": "TEST_REVIEW",
+    "EVIDENCE_REVIEW": "EVIDENCE_REVIEW",
+    "ALM_APPROVAL": "ALM_APPROVAL",
+    "ALM_ATTACHMENT": "ALM_APPROVAL",
+}
 
 
 @approval_bp.route("/approvals", methods=["GET"])
@@ -47,6 +51,8 @@ def decide(uuid):
     if not approval:
         return fail("NOT_FOUND", "Approval not found", 404)
 
+    if approval.get("decision") != "PENDING":
+        return ok({"decision": approval["decision"], "already_decided": True}, "Approval has already been recorded")
 
     decide_approval(uuid, decision, g.user_id, comment)
     audit("approval", user_id=g.user_id, workflow_id=approval["workflow_id"],
@@ -54,7 +60,7 @@ def decide(uuid):
 
     resumed = None
     if decision == "APPROVED":
-        checkpoint = _STAGE_MAP.get(approval["stage"])
+        checkpoint = _STAGE_MAP.get(approval["stage"], approval["stage"])
         _, status = dispatch_resume(approval["workflow_id"], checkpoint)
         resumed = status
     return ok({"decision": decision, "resumed": resumed}, "Decision recorded")
