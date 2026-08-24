@@ -193,3 +193,16 @@ def list_code_quality(workflow_id):
         r["issues"] = issues or []
     return runs
 
+
+def get_execution_run(workflow_id):
+    """Retrieve the latest execution run with child results for a workflow."""
+    runs = list_executions(workflow_id)
+    return runs[0] if runs else None
+
+
+def get_code_quality_run(workflow_id):
+    """Retrieve the latest code quality run with child issues for a workflow."""
+    runs = list_code_quality(workflow_id)
+    return runs[0] if runs else None
+
+

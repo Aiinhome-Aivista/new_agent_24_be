@@ -49,7 +49,7 @@ class CodeGeneratorAgent(BaseAgent):
         total_lines = 0
         total_latency = 0
 
-        now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        now_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         log_entries.append(f"[{now_str}] [INIT] Starting post-approval test code synthesis for Workflow {workflow_id[:8]}")
         log_entries.append(f"[{now_str}] [CONFIG] Target Language: {lang.upper()} | Framework: {framework.upper()} | Tests to generate: {len(test_cases)}")
 
@@ -213,7 +213,7 @@ Generate a complete, executable {framework} test method in {lang} that explicitl
     def _write_test_files(self, workflow_id, project, story, test_code_snippets, lang, framework, workspace_path, log_entries):
         """Write synthesized test code files to project workspace and evidence directories."""
         files_info = []
-        now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        now_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
         # Determine target file name and path
         story_slug = story.get("title", "App").replace(" ", "")
