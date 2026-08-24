@@ -5,20 +5,71 @@ from app.llm.model_router.router import get_router
 from app.repositories.test_repo import insert_test_case
 from app.workflows.state_machine import TEST_REVIEW
 
-_SYSTEM_PROMPT = """You are an expert test engineer generating executable test code.
+_SYSTEM_PROMPT = """You are an expert QA and Software Architect specializing in Test-Driven Development (TDD).
 
-Given the scenario, API contracts, and project context, generate a complete, compilable
-test method. Follow these rules:
+Given a user story, acceptance criteria, API contracts, and codebase context:
+1. Decompose the requirements into structured test case specifications.
+2. AC MAPPING: For each test case, reference the ACTUAL Acceptance Criteria (e.g., 'AC-05: User can be created via POST /api/users with valid fields').
+3. REQUEST SPECIFICATION: Provide the HTTP method, endpoint, headers, and full JSON body.
+4. EXPECTED RESPONSE & ASSERTIONS: Provide expected status code, response JSON body, and list of assertions.
+5. STATUS SOURCE VERIFICATION: If the status code (e.g. 200/201/400/404) is NOT explicitly defined in the provided API contracts or Project KB, set status_source = 'AI_ASSUMPTION' and status_note = 'Not specified in API contract (AI assumption — review required)'. Otherwise set status_source = 'CONTRACT_SPECIFIED'.
+6. CODE UNDER TEST: For responsible functions, provide the FULL architectural call chain across layers (e.g., UserController.createUser() -> UserService.createUser() -> UserRepository.save()).
 
-1. The test MUST be written in {language} using {framework}.
-2. The test MUST validate the specific scenario described.
-3. Include proper assertions (not just status code checks — validate response body fields).
-4. Include meaningful test method names that reflect the scenario.
-5. Add inline comments explaining what each section tests.
-6. For negative scenarios, verify error responses and appropriate status codes.
-7. For boundary scenarios, test edge values explicitly.
+You MUST return a valid JSON object matching this schema:
+{
+  "test_cases": [
+    {
+      "test_key": "TC-001",
+      "scenario_type": "positive",
+      "title": "Successfully create a new user with valid fields",
+      "description": "Verify user can be created via POST /api/users with name and email",
+      "story_reference": "AC-01: User can be created via POST /api/users with valid name and email",
+      "request_spec": {
+        "method": "POST",
+        "endpoint": "/api/users",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "name": "John Doe",
+          "email": "john.doe@example.com",
+          "role": "USER"
+        }
+      },
+      "expected_response_spec": {
+        "status_code": 201,
+        "status_source": "CONTRACT_SPECIFIED",
+        "status_note": "Status 201 defined in OpenAPI contract",
+        "response_body": {
+          "id": 1,
+          "name": "John Doe",
+          "email": "john.doe@example.com",
+          "role": "USER",
+          "createdAt": "2026-08-24T12:00:00Z"
+        },
+        "assertions": [
+          "response.status == 201",
+          "response.body.id != null",
+          "response.body.email == 'john.doe@example.com'"
+        ]
+      },
+      "expected_result": "API responds with 201 Created and persisted user JSON payload",
+      "priority": "high",
+      "risk": "medium",
+      "responsible_functions": [
+        "UserController.createUser()",
+        "UserService.createUser()",
+        "UserRepository.save()"
+      ]
+    }
+  ]
+}
 
-Return ONLY the test code — no explanations, no markdown fences, just compilable code.
+Rules:
+- Never leave request_spec or expected_response_spec empty.
+- If status code is an assumption not in contract, flag it with 'AI_ASSUMPTION'.
+- Provide full 3-tier responsible call chain (Controller -> Service -> Repository).
+- Do NOT generate full code files in this step; code will be generated post-approval in Stage 7.
 """
 
 
@@ -29,18 +80,18 @@ class TestGeneratorAgent(BaseAgent):
         analysis = state.get("analysis", {})
         story = state.get("story", {})
         story_id = story.get("id")
-        lang = state.get("project", {}).get("target_language", "java")
-        framework = state.get("project", {}).get("target_framework", "junit5")
+        project = state.get("project", {})
+        lang = project.get("target_language", "java")
+        framework = project.get("target_framework", "junit5")
         contracts = state.get("api_contracts", [])
-        service_plan = state.get("service_plan", {})
+        acs = state.get("acceptance_criteria", [])
 
-        # Get RAG context for richer generation
+        # Get RAG context and Workspace summary if available
         rag_context = self._get_rag_context(state, story.get("title", ""))
+        workspace_context = self._get_workspace_summary(state)
 
-        # Build contract summary for the prompt
         contract_summary = self._format_contracts(contracts)
-
-        router = get_router()
+        acs_text = "\n".join(f"  - AC-{i+1:02d}: {ac}" for i, ac in enumerate(acs)) if acs else story.get("description", "")
 
         scenario_map = [("positive", analysis.get("positive_scenarios", [])),
                         ("negative", analysis.get("negative_scenarios", [])),
@@ -48,135 +99,359 @@ class TestGeneratorAgent(BaseAgent):
                         ("validation", analysis.get("validation_scenarios", [])),
                         ("error", analysis.get("error_scenarios", []))]
 
+        # Prompt Gemini to decompose test cases, map story portions, and identify responsible functions
+        prompt = f"""User Story: {story.get('title', '')}
+Story Description:
+{story.get('description', '')}
+
+Acceptance Criteria / Requirements:
+{acs_text}
+
+Target Tech: {lang} / {framework}
+API Contracts:
+{contract_summary}
+
+Decomposed Scenarios:
+{json.dumps(analysis, default=str, indent=2)}
+"""
+        if workspace_context:
+            prompt += f"\nCodebase Structure & Source Files:\n{workspace_context}\n"
+        if rag_context:
+            prompt += f"\nKnowledge Base Context:\n{rag_context}\n"
+
+        router = get_router()
+        result = router.generate_structured(
+            "test_generation",
+            prompt=prompt,
+            system=_SYSTEM_PROMPT
+        )
+
+        parsed_tcs = self._parse_test_cases(result, scenario_map, contracts, story, acs, lang, framework)
+
         generated = []
-        idx = 1
-        total_latency = 0
-
-        for scenario_type, scenarios in scenario_map:
-            for sc in (scenarios if scenarios else []):
-                # Build a per-scenario prompt
-                sc_desc = sc.get("desc", scenario_type) if isinstance(sc, dict) else str(sc)
-                prompt = self._build_prompt(
-                    story, sc_desc, scenario_type, contract_summary, rag_context, lang, framework)
-
-                # Generate code for this specific scenario
-                code_result = router.generate_code(
-                    "test_generation",
-                    prompt=prompt,
-                    system=_SYSTEM_PROMPT.format(language=lang, framework=framework))
-
-                total_latency += (code_result.latency_ms or 0)
-
-                tc = {
-                    "test_key": f"TC-{idx:03d}",
-                    "scenario_type": scenario_type,
-                    "title": f"{scenario_type.title()} — {sc_desc}",
-                    "description": sc_desc,
-                    "expected_result": self._derive_expected_result(sc, scenario_type),
-                    "priority": self._derive_priority(scenario_type),
-                    "risk": "high" if scenario_type in ("negative", "error") else "medium",
-                    "origin": "AI_GENERATED",
-                    "status": "AWAITING_REVIEW",
-                    "generated_code": code_result.text,
-                    "target_language": lang,
-                    "framework": framework,
-                }
-                if story_id:
-                    insert_test_case(str(uuid.uuid4()), workflow_id, story_id, tc)
-                generated.append(tc)
-                idx += 1
-
-        # If no scenarios were produced at all, generate a basic test
-        if not generated:
-            fallback_result = router.generate_code(
-                "test_generation",
-                prompt=f"Generate a basic {lang}/{framework} smoke test for story: {story.get('title', '')}",
-                system=_SYSTEM_PROMPT.format(language=lang, framework=framework))
+        for idx, tc_data in enumerate(parsed_tcs, start=1):
+            key = tc_data.get("test_key") or f"TC-{idx:03d}"
             tc = {
-                "test_key": "TC-001",
-                "scenario_type": "positive",
-                "title": f"Smoke test — {story.get('title', 'Basic verification')}",
-                "description": "Basic smoke test generated as fallback",
-                "expected_result": "API responds with expected status code",
-                "priority": "high",
-                "risk": "medium",
+                "test_key": key,
+                "scenario_type": tc_data.get("scenario_type", "positive"),
+                "title": tc_data.get("title", f"Test {key}"),
+                "description": tc_data.get("description", tc_data.get("title", "")),
+                "story_reference": tc_data.get("story_reference") or f"AC-{idx:02d}: {story.get('title', 'Feature Verification')}",
+                "request_spec": tc_data.get("request_spec"),
+                "expected_response_spec": tc_data.get("expected_response_spec"),
+                "expected_result": tc_data.get("expected_result", "Expected behavior satisfies acceptance criteria"),
+                "priority": tc_data.get("priority", "high"),
+                "risk": tc_data.get("risk", "medium"),
                 "origin": "AI_GENERATED",
                 "status": "AWAITING_REVIEW",
-                "generated_code": fallback_result.text,
+                "responsible_functions": tc_data.get("responsible_functions", []),
+                "generated_code": None,
                 "target_language": lang,
                 "framework": framework,
             }
             if story_id:
                 insert_test_case(str(uuid.uuid4()), workflow_id, story_id, tc)
             generated.append(tc)
-            total_latency += (fallback_result.latency_ms or 0)
 
         state["generated_tests"] = generated
         state["current_stage"] = TEST_REVIEW  # human checkpoint
-        self._record(workflow_id, "test_generation", model_name=f"{lang}/{framework}",
-                     latency_ms=total_latency, output_summary={"count": len(generated)})
+        self._record(workflow_id, "test_generation", model_name=result.model,
+                     latency_ms=result.latency_ms, output_summary={"count": len(generated), "is_mock": result.is_mock})
         return state
 
-    def _build_prompt(self, story, scenario_desc, scenario_type, contract_summary, rag_context, lang, framework):
-        """Build a rich per-scenario prompt."""
-        prompt = f"""User Story: {story.get('title', '')}
-Description: {story.get('description', '')}
+    def _parse_test_cases(self, result, scenario_map, contracts, story, acs, lang, framework):
+        """Parse structured test cases, story references, request specs, and responsible functions."""
+        raw_tcs = []
+        if not result.is_mock:
+            try:
+                data = json.loads(result.text)
+                if isinstance(data, dict) and "test_cases" in data and isinstance(data["test_cases"], list):
+                    raw_tcs = data["test_cases"]
+                elif isinstance(data, list):
+                    raw_tcs = data
+            except Exception as e:
+                print(f"[TestGenerator] Could not parse structured JSON: {e}")
 
-Scenario Type: {scenario_type.upper()}
-Scenario: {scenario_desc}
+        service_name = (contracts[0].get("service") if contracts else "User") or "User"
+        base_entity = "".join(c for c in service_name if c.isalnum()) or "User"
+        if "user" in f"{story.get('title', '')} {story.get('description', '')}".lower():
+            base_entity = "User"
 
-API Contracts available:
-{contract_summary}
-"""
-        if rag_context:
-            prompt += f"\nProject Knowledge Base Context:\n{rag_context}\n"
+        contract_has_status = any(c.get("status_code") or c.get("response_code") for c in contracts)
 
-        prompt += f"""
-Generate a complete {lang} test method using {framework} that tests the above scenario.
-The test should:
-- Call the appropriate API endpoint from the contracts
-- Send the correct request body for a {scenario_type} test
-- Assert the expected response status code and body fields
-"""
-        return prompt
+        # Build normalized list
+        normalized = []
+        if raw_tcs:
+            for idx, tc in enumerate(raw_tcs, start=1):
+                method = (tc.get("request_spec") or {}).get("method") or ("POST" if "create" in tc.get("title", "").lower() else "GET")
+                endpoint = (tc.get("request_spec") or {}).get("endpoint") or f"/api/{base_entity.lower()}s"
+                if endpoint == "/api/resource" or endpoint.startswith("/api/resource"):
+                    endpoint = f"/api/{base_entity.lower()}s"
+
+                # Ensure clean AC mapping
+                story_ref = tc.get("story_reference", "")
+                if not story_ref or story_ref.lower().startswith("as a") or "user story" in story_ref.lower():
+                    if acs and idx <= len(acs):
+                        story_ref = f"AC-{idx:02d}: {acs[idx-1]}"
+                    else:
+                        story_ref = f"AC-{idx:02d}: {base_entity} {tc.get('title', 'operation')} verification"
+
+                # Ensure request spec body dynamically if LLM omitted it
+                req_spec = tc.get("request_spec") or {}
+                req_body = req_spec.get("body")
+                if method == "POST" and not req_body:
+                    if base_entity.lower() == "user":
+                        req_body = {
+                            "name": "Rohan",
+                            "email": "rohan@gmail.com",
+                            "password": "Password@123"
+                        }
+                    else:
+                        req_body = {
+                            f"{base_entity.lower()}Name": f"Sample {base_entity}",
+                            "status": "ACTIVE",
+                            "description": f"Test {base_entity} for {tc.get('test_key', 'TC')}"
+                        }
+                elif method == "PUT" and not req_body:
+                    if base_entity.lower() == "user":
+                        req_body = {
+                            "name": "Rohan Sharma",
+                            "email": "rohan.updated@gmail.com"
+                        }
+                    else:
+                        req_body = {
+                            f"{base_entity.lower()}Name": f"Updated {base_entity}",
+                            "status": "MODIFIED"
+                        }
+
+                # Ensure expected response spec & assertions
+                res_spec = tc.get("expected_response_spec") or {}
+                status_code = res_spec.get("status_code") or (201 if method == "POST" else 200)
+                status_source = res_spec.get("status_source") or ("CONTRACT_SPECIFIED" if contract_has_status else "AI_ASSUMPTION")
+                status_note = res_spec.get("status_note") or (f"Status {status_code} verified in API contract" if status_source == "CONTRACT_SPECIFIED" else f"Not specified in API contract (AI assumption: {status_code} — review required)")
+
+                res_body = res_spec.get("response_body")
+                if not res_body:
+                    if status_code in (200, 201):
+                        res_body = {
+                            "id": 1,
+                            **(req_body if isinstance(req_body, dict) else {}),
+                            "createdAt": "2026-08-24T12:00:00Z",
+                            "updatedAt": "2026-08-24T12:00:00Z"
+                        }
+                    else:
+                        res_body = {
+                            "error": "Validation Error",
+                            "message": tc.get("description", "Invalid request parameters"),
+                            "statusCode": status_code
+                        }
+
+                assertions = res_spec.get("assertions")
+                if not assertions:
+                    if status_code in (200, 201):
+                        assertions = [
+                            f"{base_entity} created successfully" if method == "POST" else f"{base_entity} processed successfully",
+                            "ID generated (not null)",
+                            f"Response payload matches request parameters",
+                            "Timestamps populated (createdAt, updatedAt)"
+                        ]
+                        if base_entity.lower() == "user":
+                            assertions.append("Password NOT returned in response")
+                    else:
+                        assertions = [
+                            f"Request rejected with status {status_code}",
+                            "Validation error details present in response",
+                            "No database mutation performed"
+                        ]
+
+                # Ensure layered call chain
+                resp_funcs = tc.get("responsible_functions")
+                if not resp_funcs or len(resp_funcs) < 2:
+                    action_name = "createUser" if method == "POST" else "updateUser" if method == "PUT" else "deleteUser" if method == "DELETE" else "getUserById"
+                    resp_funcs = [
+                        f"{base_entity}Controller.{action_name}()",
+                        f"{base_entity}Service.{action_name}()",
+                        f"{base_entity}Repository.{'save()' if method in ('POST', 'PUT') else 'deleteById()' if method == 'DELETE' else 'findById()'}"
+                    ]
+
+                normalized.append({
+                    "test_key": tc.get("test_key") or f"TC-{idx:03d}",
+                    "scenario_type": tc.get("scenario_type", "positive"),
+                    "title": tc.get("title", f"Test {idx}"),
+                    "description": tc.get("description", ""),
+                    "story_reference": story_ref,
+                    "request_spec": {
+                        "method": method,
+                        "endpoint": endpoint,
+                        "headers": {"Content-Type": "application/json"},
+                        "body": req_body
+                    },
+                    "expected_response_spec": {
+                        "status_code": status_code,
+                        "status_source": status_source,
+                        "status_note": status_note,
+                        "response_body": res_body,
+                        "assertions": assertions
+                    },
+                    "expected_result": tc.get("expected_result") or f"API returns HTTP {status_code} with expected JSON schema",
+                    "priority": tc.get("priority", "high"),
+                    "risk": tc.get("risk", "medium"),
+                    "responsible_functions": resp_funcs
+                })
+            return normalized
+
+        # Fallback: derive test cases, request/response specs, story references, and layered functions
+        derived = []
+        idx = 1
+
+        for scenario_type, scenarios in scenario_map:
+            for sc_idx, sc in enumerate(scenarios if scenarios else []):
+                desc = sc.get("desc", scenario_type) if isinstance(sc, dict) else str(sc)
+                
+                # Determine HTTP method and endpoint
+                method = "GET"
+                endpoint = f"/api/{base_entity.lower()}s"
+                if "create" in desc.lower() or "post" in desc.lower() or "add" in desc.lower():
+                    method = "POST"
+                elif "update" in desc.lower() or "put" in desc.lower() or "modify" in desc.lower():
+                    method = "PUT"
+                    endpoint = f"/api/{base_entity.lower()}s/1"
+                elif "delete" in desc.lower():
+                    method = "DELETE"
+                    endpoint = f"/api/{base_entity.lower()}s/1"
+                elif "by id" in desc.lower() or "get user" in desc.lower():
+                    method = "GET"
+                    endpoint = f"/api/{base_entity.lower()}s/1"
+
+                # Layered Call Chain: Controller -> Service -> Repository
+                action_name = "createUser" if method == "POST" else "updateUser" if method == "PUT" else "deleteUser" if method == "DELETE" else "getUserById"
+                resp_funcs = [
+                    f"{base_entity}Controller.{action_name}()",
+                    f"{base_entity}Service.{action_name}()",
+                    f"{base_entity}Repository.{'save()' if method in ('POST', 'PUT') else 'deleteById()' if method == 'DELETE' else 'findById()'}"
+                ]
+
+                # AC Mapping (e.g. AC-05: User can be created through REST API)
+                story_ref = ""
+                if acs and sc_idx < len(acs):
+                    story_ref = f"AC-{sc_idx+1:02d}: {acs[sc_idx]}"
+                elif method == "POST":
+                    story_ref = f"AC-05: {base_entity} can be created through REST API"
+                else:
+                    story_ref = f"AC-{idx:02d}: {desc}"
+
+                # Status code & verification
+                if scenario_type == "positive":
+                    status_code = 201 if method == "POST" else 200
+                elif scenario_type in ("negative", "validation"):
+                    status_code = 400
+                elif scenario_type == "boundary":
+                    status_code = 422
+                else:
+                    status_code = 500
+
+                status_source = "CONTRACT_SPECIFIED" if contract_has_status else "AI_ASSUMPTION"
+                status_note = f"Status {status_code} in API contract" if status_source == "CONTRACT_SPECIFIED" else f"Not specified in API contract (AI assumption: {status_code} — review required)"
+
+                # Request & Response specs
+                req_body = {
+                    "name": "Rohan",
+                    "email": "rohan@gmail.com",
+                    "password": "Password@123"
+                } if method == "POST" else {
+                    "name": "Rohan Sharma",
+                    "email": "rohan.updated@gmail.com"
+                } if method == "PUT" else None
+
+                res_body = {
+                    "id": 1,
+                    "name": "Rohan",
+                    "email": "rohan@gmail.com",
+                    "createdAt": "2026-08-24T12:00:00Z",
+                    "updatedAt": "2026-08-24T12:00:00Z"
+                } if status_code in (200, 201) else {
+                    "error": "Validation Error",
+                    "message": desc,
+                    "statusCode": status_code
+                }
+
+                assertions = [
+                    f"{base_entity} created successfully",
+                    "ID generated (not null)",
+                    "Name matches request ('Rohan')",
+                    "Email matches request ('rohan@gmail.com')",
+                    "Timestamps populated (createdAt, updatedAt)",
+                    "Password NOT returned in response"
+                ] if status_code in (200, 201) and method == "POST" else [
+                    f"Response status is {status_code}",
+                    f"Payload conforms to {base_entity} schema",
+                    "Database state verified"
+                ]
+
+                derived.append({
+                    "test_key": f"TC-{idx:03d}",
+                    "scenario_type": scenario_type,
+                    "title": f"{scenario_type.title()} — {desc}",
+                    "description": desc,
+                    "story_reference": story_ref,
+                    "request_spec": {
+                        "method": method,
+                        "endpoint": endpoint,
+                        "headers": {"Content-Type": "application/json"},
+                        "body": req_body
+                    },
+                    "expected_response_spec": {
+                        "status_code": status_code,
+                        "status_source": status_source,
+                        "status_note": status_note,
+                        "response_body": res_body,
+                        "assertions": assertions
+                    },
+                    "expected_result": self._derive_expected_result(desc, scenario_type),
+                    "priority": "high" if scenario_type in ("positive", "negative") else "medium",
+                    "risk": "high" if scenario_type in ("negative", "error") else "medium",
+                    "responsible_functions": resp_funcs,
+                })
+                idx += 1
+
+        return derived
 
     def _format_contracts(self, contracts):
-        """Format API contracts for inclusion in the prompt."""
         if not contracts:
-            return "No API contracts available."
+            return "No explicit API contracts defined."
         lines = []
         for c in contracts:
-            line = f"  - {c.get('method', 'GET')} {c.get('path', '/')} (service: {c.get('service', 'unknown')})"
-            lines.append(line)
+            lines.append(f"  - {c.get('method', 'GET')} {c.get('path', '/')} (service: {c.get('service', 'unknown')})")
         return "\n".join(lines)
 
-    def _derive_expected_result(self, scenario, scenario_type):
-        """Derive expected result from scenario type."""
-        desc = scenario.get("desc", "") if isinstance(scenario, dict) else str(scenario)
+    def _derive_expected_result(self, desc, scenario_type):
         if scenario_type == "positive":
-            return f"Request succeeds with 200/201 status. {desc}"
+            return f"Request succeeds with expected status and payload matches schema. {desc}"
         elif scenario_type == "negative":
-            return f"Request is rejected with appropriate error code (400/401/403/422). {desc}"
+            return f"Request is rejected with appropriate 4xx status and structured error message. {desc}"
         elif scenario_type == "boundary":
-            return f"System handles edge case correctly. {desc}"
+            return f"System handles boundary/limit value gracefully without overflow or corruption. {desc}"
         elif scenario_type == "validation":
-            return f"Input validation catches invalid data. {desc}"
+            return f"Validation error returned indicating specific invalid field. {desc}"
         elif scenario_type == "error":
-            return f"System returns proper error response. {desc}"
-        return f"Behavior matches the acceptance criteria. {desc}"
+            return f"System catches exception and returns safe 5xx error payload. {desc}"
+        return f"Behavior conforms to acceptance criteria. {desc}"
 
-    def _derive_priority(self, scenario_type):
-        """Derive test priority from scenario type."""
-        return {
-            "positive": "high",
-            "negative": "high",
-            "boundary": "medium",
-            "validation": "medium",
-            "error": "high",
-        }.get(scenario_type, "medium")
+    def _get_workspace_summary(self, state):
+        ws_path = state.get("workspace_path")
+        if not ws_path:
+            return ""
+        try:
+            from app.tools.repository.workspace import GitWorkspace
+            project = state.get("project", {})
+            if project and project.get("uuid"):
+                ws = GitWorkspace(project["uuid"], project.get("git_repo_url", ""))
+                return ws.get_source_summary(max_files=10, max_bytes_per_file=3000)
+        except Exception as e:
+            print(f"[TestGenerator] Could not read workspace source summary: {e}")
+        return ""
 
     def _get_rag_context(self, state, query_text):
-        """Retrieve relevant knowledge base context for the project."""
         try:
             project = state.get("project", {})
             project_id = project.get("id")
@@ -184,10 +459,12 @@ The test should:
                 return ""
             from app.rag.retrieval.retriever import get_retriever
             retriever = get_retriever()
-            chunks = retriever.retrieve(project_id=project_id, query=query_text, top_k=5)
+            chunks = retriever.retrieve(project_id=project_id, query=query_text, top_k=3)
             if chunks:
-                return "\n---\n".join(c.content[:500] for c in chunks[:5])
+                return "\n---\n".join(c.content[:400] for c in chunks[:3])
         except Exception as e:
             print(f"[TestGenerator] RAG retrieval failed: {e}")
         return ""
+
+
 

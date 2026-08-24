@@ -31,20 +31,32 @@ def start_workflow():
     project = query("SELECT * FROM projects WHERE id=%s", (story["project_id"],), fetchone=True)
     acs = story_acceptance_criteria(story["id"])
     
-    # If no criteria in DB table, extract from story description/title so analysis does not get blocked
+    # If no criteria in DB table, extract from story description/title
     if not acs:
         desc = story.get("description", "") or ""
         extracted = []
         if desc:
             lines = [line.strip().lstrip("-*•1234567890. ") for line in desc.split("\n") if line.strip()]
             for l in lines:
-                if len(l) > 10 and not l.startswith("#") and not l.lower().startswith("user story"):
+                low = l.lower()
+                # Skip story narrative template lines
+                if (len(l) > 6 and not l.startswith("#") 
+                        and not low.startswith("as a") 
+                        and not low.startswith("i want") 
+                        and not low.startswith("so that") 
+                        and not low.startswith("in order") 
+                        and not low.startswith("user story")
+                        and not low.startswith("acceptance criteria")
+                        and not low.startswith("description")):
                     extracted.append({"text": l})
         if not extracted:
+            entity_name = "user" if "user" in story.get("title", "").lower() else "resource"
             extracted = [
-                {"text": f"Given valid request parameters, when {story.get('title', 'feature')} is executed, then return success status and valid payload."},
-                {"text": f"Given invalid or missing input parameters, when {story.get('title', 'feature')} is requested, then reject with validation error."},
-                {"text": f"Ensure boundary handling, security constraints, and robust error management for {story.get('title', 'feature')}."}
+                {"text": f"{entity_name.capitalize()} can be created through REST API via POST /api/{entity_name}s with valid parameters"},
+                {"text": f"{entity_name.capitalize()} details can be retrieved by ID via GET /api/{entity_name}s/{{id}}"},
+                {"text": f"{entity_name.capitalize()} details can be updated via PUT /api/{entity_name}s/{{id}}"},
+                {"text": f"{entity_name.capitalize()} can be deleted via DELETE /api/{entity_name}s/{{id}}"},
+                {"text": f"Invalid or duplicate request data is rejected with appropriate 4xx validation error"}
             ]
         acs = extracted
 
@@ -52,15 +64,30 @@ def start_workflow():
                          JOIN services s ON s.id=c.service_id WHERE s.project_id=%s""",
                       (story["project_id"],))
 
-    # If no explicit contracts in DB, derive REST endpoints for this story
+    # If no explicit contracts in DB, derive clean REST endpoints for this story
     if not contracts:
-        story_title = story.get("title", "resource")
-        clean_name = "".join(c for c in story_title if c.isalnum() or c in " -_").strip()
-        endpoint_slug = clean_name.lower().replace(" ", "-") or "api-endpoint"
-        service_name = (project or {}).get("name", "CoreService")
+        story_text = f"{story.get('title', '')} {story.get('description', '')}".lower()
+        if "user" in story_text:
+            endpoint_slug = "users"
+        elif "order" in story_text:
+            endpoint_slug = "orders"
+        elif "account" in story_text:
+            endpoint_slug = "accounts"
+        elif "product" in story_text:
+            endpoint_slug = "products"
+        elif "payment" in story_text:
+            endpoint_slug = "payments"
+        else:
+            clean_name = "".join(c for c in story.get("title", "resource") if c.isalnum() or c in " -_").strip()
+            endpoint_slug = clean_name.lower().replace(" ", "-") or "resources"
+            if not endpoint_slug.endswith("s"):
+                endpoint_slug += "s"
+
+        service_name = (project or {}).get("name", "UserService" if "user" in story_text else "CoreService")
         contracts = [
             {"service": service_name, "method": "GET", "path": f"/api/{endpoint_slug}"},
             {"service": service_name, "method": "POST", "path": f"/api/{endpoint_slug}"},
+            {"service": service_name, "method": "GET", "path": f"/api/{endpoint_slug}/{{id}}"},
             {"service": service_name, "method": "PUT", "path": f"/api/{endpoint_slug}/{{id}}"},
             {"service": service_name, "method": "DELETE", "path": f"/api/{endpoint_slug}/{{id}}"},
         ]

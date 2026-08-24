@@ -3,24 +3,117 @@ import json
 from app.extensions.db import query, execute
 
 
+def _ensure_schema():
+    """Ensure optional columns exist in test_cases table."""
+    try:
+        cols_rf = query("SHOW COLUMNS FROM test_cases LIKE 'responsible_functions'")
+        if not cols_rf:
+            execute("ALTER TABLE test_cases ADD COLUMN responsible_functions TEXT NULL")
+        cols_sr = query("SHOW COLUMNS FROM test_cases LIKE 'story_reference'")
+        if not cols_sr:
+            execute("ALTER TABLE test_cases ADD COLUMN story_reference TEXT NULL")
+        cols_req = query("SHOW COLUMNS FROM test_cases LIKE 'request_spec'")
+        if not cols_req:
+            execute("ALTER TABLE test_cases ADD COLUMN request_spec TEXT NULL")
+        cols_res = query("SHOW COLUMNS FROM test_cases LIKE 'expected_response_spec'")
+        if not cols_res:
+            execute("ALTER TABLE test_cases ADD COLUMN expected_response_spec TEXT NULL")
+    except Exception as e:
+        print(f"[test_repo] Schema check warning: {e}")
+
+
 def insert_test_case(uuid, workflow_id, story_id, tc):
-    return execute("""INSERT INTO test_cases
-        (uuid, workflow_id, story_id, test_key, scenario_type, title, description,
-         expected_result, priority, risk, origin, status, generated_code, target_language, framework)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-        (uuid, workflow_id, story_id, tc["test_key"], tc["scenario_type"], tc["title"],
-         tc.get("description"), tc.get("expected_result"), tc.get("priority", "medium"),
-         tc.get("risk", "medium"), tc.get("origin", "AI_GENERATED"),
-         tc.get("status", "AWAITING_REVIEW"), tc.get("generated_code"),
-         tc.get("target_language"), tc.get("framework")), return_id=True)
+    _ensure_schema()
+    resp_funcs = tc.get("responsible_functions", [])
+    if isinstance(resp_funcs, list):
+        resp_funcs_str = json.dumps(resp_funcs)
+    else:
+        resp_funcs_str = str(resp_funcs) if resp_funcs else "[]"
+
+    story_ref = tc.get("story_reference", "")
+    req_spec = tc.get("request_spec")
+    req_spec_str = json.dumps(req_spec) if isinstance(req_spec, dict) else (str(req_spec) if req_spec else None)
+
+    res_spec = tc.get("expected_response_spec")
+    res_spec_str = json.dumps(res_spec) if isinstance(res_spec, dict) else (str(res_spec) if res_spec else None)
+
+    try:
+        return execute("""INSERT INTO test_cases
+            (uuid, workflow_id, story_id, test_key, scenario_type, title, description,
+             expected_result, priority, risk, origin, status, generated_code, target_language, framework,
+             responsible_functions, story_reference, request_spec, expected_response_spec)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (uuid, workflow_id, story_id, tc["test_key"], tc["scenario_type"], tc["title"],
+             tc.get("description"), tc.get("expected_result"), tc.get("priority", "medium"),
+             tc.get("risk", "medium"), tc.get("origin", "AI_GENERATED"),
+             tc.get("status", "AWAITING_REVIEW"), tc.get("generated_code"),
+             tc.get("target_language"), tc.get("framework"), resp_funcs_str, story_ref,
+             req_spec_str, res_spec_str), return_id=True)
+    except Exception:
+        # Fallback with subset of columns
+        try:
+            return execute("""INSERT INTO test_cases
+                (uuid, workflow_id, story_id, test_key, scenario_type, title, description,
+                 expected_result, priority, risk, origin, status, generated_code, target_language, framework, responsible_functions, story_reference)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (uuid, workflow_id, story_id, tc["test_key"], tc["scenario_type"], tc["title"],
+                 tc.get("description"), tc.get("expected_result"), tc.get("priority", "medium"),
+                 tc.get("risk", "medium"), tc.get("origin", "AI_GENERATED"),
+                 tc.get("status", "AWAITING_REVIEW"), tc.get("generated_code"),
+                 tc.get("target_language"), tc.get("framework"), resp_funcs_str, story_ref), return_id=True)
+        except Exception:
+            return execute("""INSERT INTO test_cases
+                (uuid, workflow_id, story_id, test_key, scenario_type, title, description,
+                 expected_result, priority, risk, origin, status, generated_code, target_language, framework)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (uuid, workflow_id, story_id, tc["test_key"], tc["scenario_type"], tc["title"],
+                 tc.get("description"), tc.get("expected_result"), tc.get("priority", "medium"),
+                 tc.get("risk", "medium"), tc.get("origin", "AI_GENERATED"),
+                 tc.get("status", "AWAITING_REVIEW"), tc.get("generated_code"),
+                 tc.get("target_language"), tc.get("framework")), return_id=True)
 
 
 def list_test_cases(workflow_id):
-    return query("SELECT * FROM test_cases WHERE workflow_id=%s ORDER BY test_key", (workflow_id,))
+    rows = query("SELECT * FROM test_cases WHERE workflow_id=%s ORDER BY test_key", (workflow_id,))
+    if not rows:
+        return []
+    for r in rows:
+        rf = r.get("responsible_functions")
+        if rf and isinstance(rf, str):
+            try:
+                r["responsible_functions"] = json.loads(rf)
+            except Exception:
+                r["responsible_functions"] = [rf]
+        elif not rf:
+            r["responsible_functions"] = []
+
+        req = r.get("request_spec")
+        if req and isinstance(req, str):
+            try:
+                r["request_spec"] = json.loads(req)
+            except Exception:
+                pass
+
+        res = r.get("expected_response_spec")
+        if res and isinstance(res, str):
+            try:
+                r["expected_response_spec"] = json.loads(res)
+            except Exception:
+                pass
+    return rows
 
 
 def set_test_status(uuid, status):
     execute("UPDATE test_cases SET status=%s WHERE uuid=%s", (status, uuid))
+
+
+def update_test_case_code(uuid, generated_code, status="CODE_GENERATED"):
+    execute("UPDATE test_cases SET generated_code=%s, status=%s WHERE uuid=%s", (generated_code, status, uuid))
+
+
+def update_test_case_code_by_key(workflow_id, test_key, generated_code, status="CODE_GENERATED"):
+    execute("UPDATE test_cases SET generated_code=%s, status=%s WHERE workflow_id=%s AND test_key=%s",
+            (generated_code, status, workflow_id, test_key))
 
 
 def create_execution_run(uuid, workflow_id, runner, environment, collection, status, total, passed, failed, is_mock):

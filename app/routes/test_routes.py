@@ -38,3 +38,17 @@ def executions(workflow_id):
 def code_quality(workflow_id):
     return ok({"code_quality": list_code_quality(workflow_id)})
 
+
+@test_bp.route("/workflows/<workflow_id>/code-log", methods=["GET"])
+@require_auth
+@require_permission("workflow.read")
+def code_log(workflow_id):
+    from app.repositories.workflow_repo import get_run
+    run = get_run(workflow_id)
+    if not run:
+        return fail("NOT_FOUND", "Workflow not found", 404)
+    state = run.get("state_json") or {}
+    generation_log = state.get("code_generation")
+    return ok({"code_log": generation_log})
+
+

@@ -7,6 +7,7 @@ approval.
 from app.agents.requirement_analyzer.agent import RequirementAnalyzerAgent
 from app.agents.service_planner.agent import ServicePlannerAgent
 from app.agents.test_generator.agent import TestGeneratorAgent
+from app.agents.code_generator.agent import CodeGeneratorAgent
 from app.agents.api_executor.agent import ApiExecutorAgent
 from app.agents.code_validator.agent import CodeValidatorAgent
 from app.agents.evidence_generator.agent import EvidenceGeneratorAgent
@@ -21,6 +22,7 @@ STAGE_AGENTS = {
     sm.REQUIREMENT_ANALYSIS: RequirementAnalyzerAgent(),
     sm.SERVICE_PLANNING: ServicePlannerAgent(),
     sm.TEST_GENERATION: TestGeneratorAgent(),
+    sm.CODE_GENERATION: CodeGeneratorAgent(),
     sm.API_EXECUTION: ApiExecutorAgent(),
     sm.CODE_VALIDATION: CodeValidatorAgent(),
     sm.EVIDENCE_GENERATION: EvidenceGeneratorAgent(),
