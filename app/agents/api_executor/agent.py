@@ -11,11 +11,13 @@ class ApiExecutorAgent(BaseAgent):
     name = "api_executor"
 
     def run(self, workflow_id, state):
+        from app.repositories.test_repo import list_test_cases
         runner = get_runner()
         collection = state.get("collection_path")
         environment = state.get("environment", "default")
+        test_cases = list_test_cases(workflow_id) or state.get("generated_tests", [])
 
-        run = runner.run(collection, environment)
+        run = runner.run(collection, environment, test_cases=test_cases)
         passed = sum(1 for r in run.results if r["passed"])
         failed = len(run.results) - passed
 
@@ -27,8 +29,9 @@ class ApiExecutorAgent(BaseAgent):
             is_mock=1 if run.is_mock else 0)
 
         for r in run.results:
+            tc_id = r.get("test_case_id")
             res_id = add_execution_result(
-                str(uuid.uuid4()), run_id, None, r["status_code"], 1 if r["passed"] else 0,
+                str(uuid.uuid4()), run_id, tc_id, r["status_code"], 1 if r["passed"] else 0,
                 r["duration_ms"], r["assertions"], 1 if run.is_mock else 0)
             save_raw_request(res_id, r["request"]["method"], r["request"]["url"], {}, None)
             save_raw_response(res_id, r["status_code"], {}, r.get("response_body"), None)

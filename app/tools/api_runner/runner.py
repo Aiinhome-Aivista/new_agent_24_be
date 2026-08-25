@@ -41,18 +41,46 @@ class NewmanRunner:
 
 class MockApiRunner:
     """Labeled MOCK runner — deterministic demo results, never presented as a real run."""
-    def run(self, collection_path, environment):
+    def run(self, collection_path, environment, test_cases=None):
         rng = random.Random(collection_path or "seed")
         results = []
-        for i in range(3):
-            passed = rng.random() > 0.25
+        tests_to_run = test_cases if (test_cases and len(test_cases) > 0) else [None, None, None]
+        for idx, tc in enumerate(tests_to_run):
+            if isinstance(tc, dict):
+                req = tc.get("request_spec") or {}
+                res_spec = tc.get("expected_response_spec") or {}
+                exp_status = res_spec.get("status_code", 200)
+                method = req.get("method", "POST")
+                url = req.get("endpoint", "/api/resource")
+                assertions_list = res_spec.get("assertions", ["Response status code is expected"])
+                tc_id = tc.get("id")
+                tc_key = tc.get("test_key", f"TC-{idx+1:03d}")
+            else:
+                method = "POST"
+                url = "/api/resource"
+                exp_status = 200
+                assertions_list = ["Response status code is expected"]
+                tc_id = None
+                tc_key = f"TC-{idx+1:03d}"
+
+            # High pass rate for realistic demo executions
+            passed = rng.random() > 0.15
+            status_code = exp_status if passed else (500 if exp_status in (200, 201) else 200)
+            
+            built_assertions = []
+            for a in (assertions_list[:3] if assertions_list else ["Status code is as expected"]):
+                a_name = a if isinstance(a, str) else str(a)
+                built_assertions.append({"name": a_name, "passed": passed})
+
             results.append({
-                "status_code": 200 if passed else 422,
+                "test_case_id": tc_id,
+                "test_key": tc_key,
+                "status_code": status_code,
                 "passed": passed,
-                "duration_ms": rng.randint(40, 180),
-                "assertions": [{"name": "status is expected", "passed": passed}],
-                "request": {"method": "POST", "url": "/api/payments/authorize"},
-                "response_body": json.dumps({"_mock": True, "authCode": "MOCK-AUTH", "status": "AUTHORIZED" if passed else "DECLINED"}),
+                "duration_ms": rng.randint(35, 160),
+                "assertions": built_assertions,
+                "request": {"method": method, "url": url},
+                "response_body": json.dumps({"_mock": True, "status": "SUCCESS" if passed else "FAILED", "code": status_code}),
             })
         return ApiRunResult(results, is_mock=True)
 
@@ -61,3 +89,4 @@ def get_runner():
     if Config.API_RUNNER == "newman":
         return NewmanRunner()
     return MockApiRunner()
+

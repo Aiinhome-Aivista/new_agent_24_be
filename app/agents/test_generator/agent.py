@@ -7,12 +7,12 @@ from app.workflows.state_machine import TEST_REVIEW
 
 _SYSTEM_PROMPT = """You are an expert QA and Software Architect specializing in Test-Driven Development (TDD).
 
-Given a user story, acceptance criteria, API contracts, and codebase context:
-1. Decompose the requirements into structured test case specifications.
+Given a user story, acceptance criteria, API contracts, and decomposed scenarios:
+1. MANDATORY 100% COVERAGE RULE: You MUST generate a dedicated, detailed test case for EVERY SINGLE decomposed scenario provided in the input (including ALL positive, negative, boundary, validation, and error scenarios). Do NOT omit, summarize, truncate, or combine scenarios. If there are 10 decomposed scenarios, you MUST output at least 10 test cases (`TC-001` through `TC-010`).
 2. AC MAPPING: For each test case, reference the ACTUAL Acceptance Criteria (e.g., 'AC-05: User can be created via POST /api/users with valid fields').
-3. REQUEST SPECIFICATION: Provide the HTTP method, endpoint, headers, and full JSON body.
-4. EXPECTED RESPONSE & ASSERTIONS: Provide expected status code, response JSON body, and list of assertions.
-5. STATUS SOURCE VERIFICATION: If the status code (e.g. 200/201/400/404) is NOT explicitly defined in the provided API contracts or Project KB, set status_source = 'AI_ASSUMPTION' and status_note = 'Not specified in API contract (AI assumption — review required)'. Otherwise set status_source = 'CONTRACT_SPECIFIED'.
+3. REQUEST SPECIFICATION: Provide the specific HTTP method, endpoint, headers, and full JSON body matching the scenario under test.
+4. EXPECTED RESPONSE & ASSERTIONS: Provide expected status code, response JSON body, and comprehensive list of assertions.
+5. STATUS SOURCE VERIFICATION: If the status code (e.g. 200/201/400/401/403/404/422) is NOT explicitly defined in the provided API contracts or Project KB, set status_source = 'AI_ASSUMPTION' and status_note = 'Not specified in API contract (AI assumption — review required)'. Otherwise set status_source = 'CONTRACT_SPECIFIED'.
 6. CODE UNDER TEST: For responsible functions, provide the FULL architectural call chain across layers (e.g., UserController.createUser() -> UserService.createUser() -> UserRepository.save()).
 
 You MUST return a valid JSON object matching this schema:
@@ -66,6 +66,7 @@ You MUST return a valid JSON object matching this schema:
 }
 
 Rules:
+- Generate a test case for every positive, negative, boundary, validation, and error scenario.
 - Never leave request_spec or expected_response_spec empty.
 - If status code is an assumption not in contract, flag it with 'AI_ASSUMPTION'.
 - Provide full 3-tier responsible call chain (Controller -> Service -> Repository).
@@ -99,6 +100,15 @@ class TestGeneratorAgent(BaseAgent):
                         ("validation", analysis.get("validation_scenarios", [])),
                         ("error", analysis.get("error_scenarios", []))]
 
+        scenario_items = []
+        for stype, slist in scenario_map:
+            for s in (slist or []):
+                s_id = s.get("id", "SCN") if isinstance(s, dict) else "SCN"
+                s_desc = s.get("desc", str(s)) if isinstance(s, dict) else str(s)
+                scenario_items.append(f"  - [{stype.upper()}] ({s_id}): {s_desc}")
+        scenario_list_text = "\n".join(scenario_items) if scenario_items else "No explicit decomposed scenarios provided."
+        scenario_count = len(scenario_items)
+
         # Prompt Gemini to decompose test cases, map story portions, and identify responsible functions
         prompt = f"""User Story: {story.get('title', '')}
 Story Description:
@@ -111,8 +121,14 @@ Target Tech: {lang} / {framework}
 API Contracts:
 {contract_summary}
 
-Decomposed Scenarios:
+Total Decomposed Scenarios to generate test cases for ({scenario_count} scenarios):
+{scenario_list_text}
+
+Full Decomposed Analysis JSON:
 {json.dumps(analysis, default=str, indent=2)}
+
+CRITICAL INSTRUCTION:
+You MUST generate a separate, distinct test case (`TC-001`, `TC-002`, ..., `TC-{max(scenario_count, 1):03d}`) for EVERY SINGLE one of the {scenario_count} scenarios listed above. Cover every positive, negative, boundary, validation, and error scenario. Do NOT truncate or omit any scenario.
 """
         if workspace_context:
             prompt += f"\nCodebase Structure & Source Files:\n{workspace_context}\n"
@@ -303,46 +319,76 @@ Decomposed Scenarios:
         # Fallback: derive test cases, request/response specs, story references, and layered functions
         derived = []
         idx = 1
+        is_auth_story = any(kw in f"{story.get('title', '')} {story.get('description', '')}".lower() for kw in ("jwt", "auth", "login", "register", "token", "security"))
 
         for scenario_type, scenarios in scenario_map:
             for sc_idx, sc in enumerate(scenarios if scenarios else []):
                 desc = sc.get("desc", scenario_type) if isinstance(sc, dict) else str(sc)
+                desc_lower = desc.lower()
                 
                 # Determine HTTP method and endpoint
                 method = "GET"
                 endpoint = f"/api/{base_entity.lower()}s"
-                if "create" in desc.lower() or "post" in desc.lower() or "add" in desc.lower():
-                    method = "POST"
-                elif "update" in desc.lower() or "put" in desc.lower() or "modify" in desc.lower():
-                    method = "PUT"
-                    endpoint = f"/api/{base_entity.lower()}s/1"
-                elif "delete" in desc.lower():
-                    method = "DELETE"
-                    endpoint = f"/api/{base_entity.lower()}s/1"
-                elif "by id" in desc.lower() or "get user" in desc.lower():
-                    method = "GET"
-                    endpoint = f"/api/{base_entity.lower()}s/1"
+
+                if is_auth_story:
+                    if any(kw in desc_lower for kw in ("register", "signup", "create user")):
+                        method = "POST"
+                        endpoint = "/api/auth/register"
+                    elif any(kw in desc_lower for kw in ("login", "authenticate", "credential")):
+                        method = "POST"
+                        endpoint = "/api/auth/login"
+                    elif any(kw in desc_lower for kw in ("without jwt", "unauthorized", "missing token", "missing auth", "no jwt")):
+                        method = "GET"
+                        endpoint = "/api/users/profile"
+                    elif any(kw in desc_lower for kw in ("invalid jwt", "tampered", "expired jwt", "expired token")):
+                        method = "GET"
+                        endpoint = "/api/users/profile"
+                    else:
+                        method = "POST" if "post" in desc_lower else "GET"
+                        endpoint = "/api/auth/verify" if "verify" in desc_lower else "/api/users/profile"
+                else:
+                    if "create" in desc_lower or "post" in desc_lower or "add" in desc_lower:
+                        method = "POST"
+                    elif "update" in desc_lower or "put" in desc_lower or "modify" in desc_lower:
+                        method = "PUT"
+                        endpoint = f"/api/{base_entity.lower()}s/1"
+                    elif "delete" in desc_lower:
+                        method = "DELETE"
+                        endpoint = f"/api/{base_entity.lower()}s/1"
+                    elif "by id" in desc_lower or f"get {base_entity.lower()}" in desc_lower:
+                        method = "GET"
+                        endpoint = f"/api/{base_entity.lower()}s/1"
 
                 # Layered Call Chain: Controller -> Service -> Repository
-                action_name = "createUser" if method == "POST" else "updateUser" if method == "PUT" else "deleteUser" if method == "DELETE" else "getUserById"
-                resp_funcs = [
-                    f"{base_entity}Controller.{action_name}()",
-                    f"{base_entity}Service.{action_name}()",
-                    f"{base_entity}Repository.{'save()' if method in ('POST', 'PUT') else 'deleteById()' if method == 'DELETE' else 'findById()'}"
-                ]
+                if is_auth_story:
+                    action_name = "register" if "register" in endpoint else "login" if "login" in endpoint else "validateToken"
+                    resp_funcs = [
+                        f"AuthController.{action_name}()",
+                        f"AuthService.{action_name}()",
+                        f"UserRepository.{'save()' if 'register' in endpoint else 'findByEmail()'}"
+                    ]
+                else:
+                    action_name = "createUser" if method == "POST" else "updateUser" if method == "PUT" else "deleteUser" if method == "DELETE" else "getUserById"
+                    resp_funcs = [
+                        f"{base_entity}Controller.{action_name}()",
+                        f"{base_entity}Service.{action_name}()",
+                        f"{base_entity}Repository.{'save()' if method in ('POST', 'PUT') else 'deleteById()' if method == 'DELETE' else 'findById()'}"
+                    ]
 
-                # AC Mapping (e.g. AC-05: User can be created through REST API)
+                # AC Mapping
                 story_ref = ""
                 if acs and sc_idx < len(acs):
                     story_ref = f"AC-{sc_idx+1:02d}: {acs[sc_idx]}"
-                elif method == "POST":
-                    story_ref = f"AC-05: {base_entity} can be created through REST API"
                 else:
                     story_ref = f"AC-{idx:02d}: {desc}"
 
                 # Status code & verification
                 if scenario_type == "positive":
-                    status_code = 201 if method == "POST" else 200
+                    status_code = 201 if ("register" in endpoint or (method == "POST" and not is_auth_story)) else 200
+                elif any(kw in desc_lower for kw in ("without jwt", "unauthorized", "missing", "no jwt")):
+                    status_code = 401
+                elif any(kw in desc_lower for kw in ("invalid jwt", "tampered", "expired", "forbidden")):
+                    status_code = 401 if "jwt" in desc_lower else 403
                 elif scenario_type in ("negative", "validation"):
                     status_code = 400
                 elif scenario_type == "boundary":
@@ -354,39 +400,80 @@ Decomposed Scenarios:
                 status_note = f"Status {status_code} in API contract" if status_source == "CONTRACT_SPECIFIED" else f"Not specified in API contract (AI assumption: {status_code} — review required)"
 
                 # Request & Response specs
-                req_body = {
-                    "name": "Rohan",
-                    "email": "rohan@gmail.com",
-                    "password": "Password@123"
-                } if method == "POST" else {
-                    "name": "Rohan Sharma",
-                    "email": "rohan.updated@gmail.com"
-                } if method == "PUT" else None
+                if is_auth_story:
+                    req_body = {
+                        "name": "Rohan",
+                        "email": "rohan@gmail.com",
+                        "password": "Password@123"
+                    } if "register" in endpoint else {
+                        "email": "rohan@gmail.com",
+                        "password": "Password@123"
+                    } if "login" in endpoint else None
+                    
+                    req_headers = {"Content-Type": "application/json"}
+                    if "without jwt" not in desc_lower and "missing" not in desc_lower and endpoint == "/api/users/profile":
+                        req_headers["Authorization"] = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
 
-                res_body = {
-                    "id": 1,
-                    "name": "Rohan",
-                    "email": "rohan@gmail.com",
-                    "createdAt": "2026-08-24T12:00:00Z",
-                    "updatedAt": "2026-08-24T12:00:00Z"
-                } if status_code in (200, 201) else {
-                    "error": "Validation Error",
-                    "message": desc,
-                    "statusCode": status_code
-                }
+                    if status_code in (200, 201):
+                        res_body = {
+                            "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                            "tokenType": "Bearer",
+                            "user": {"id": 1, "email": "rohan@gmail.com", "name": "Rohan"}
+                        } if "login" in endpoint else {
+                            "id": 1,
+                            "email": "rohan@gmail.com",
+                            "name": "Rohan",
+                            "createdAt": "2026-08-24T12:00:00Z"
+                        }
+                    else:
+                        res_body = {
+                            "error": "Unauthorized" if status_code == 401 else "Validation Error",
+                            "message": desc,
+                            "statusCode": status_code
+                        }
+                    assertions = [
+                        f"Response status code is {status_code}",
+                        "JWT token present in response payload" if "login" in endpoint and status_code == 200 else "Hashed password NOT exposed in response",
+                        "Security context successfully verified"
+                    ] if status_code in (200, 201) else [
+                        f"Request rejected with status {status_code}",
+                        "Appropriate error response payload returned",
+                        "Unauthorized access blocked"
+                    ]
+                else:
+                    req_headers = {"Content-Type": "application/json"}
+                    req_body = {
+                        "name": "Rohan",
+                        "email": "rohan@gmail.com",
+                        "password": "Password@123"
+                    } if method == "POST" else {
+                        "name": "Rohan Sharma",
+                        "email": "rohan.updated@gmail.com"
+                    } if method == "PUT" else None
 
-                assertions = [
-                    f"{base_entity} created successfully",
-                    "ID generated (not null)",
-                    "Name matches request ('Rohan')",
-                    "Email matches request ('rohan@gmail.com')",
-                    "Timestamps populated (createdAt, updatedAt)",
-                    "Password NOT returned in response"
-                ] if status_code in (200, 201) and method == "POST" else [
-                    f"Response status is {status_code}",
-                    f"Payload conforms to {base_entity} schema",
-                    "Database state verified"
-                ]
+                    res_body = {
+                        "id": 1,
+                        "name": "Rohan",
+                        "email": "rohan@gmail.com",
+                        "createdAt": "2026-08-24T12:00:00Z",
+                        "updatedAt": "2026-08-24T12:00:00Z"
+                    } if status_code in (200, 201) else {
+                        "error": "Validation Error",
+                        "message": desc,
+                        "statusCode": status_code
+                    }
+
+                    assertions = [
+                        f"{base_entity} processed successfully",
+                        "ID generated (not null)",
+                        "Name matches request ('Rohan')",
+                        "Email matches request ('rohan@gmail.com')",
+                        "Timestamps populated (createdAt, updatedAt)",
+                    ] if status_code in (200, 201) and method == "POST" else [
+                        f"Response status is {status_code}",
+                        f"Payload conforms to {base_entity} schema",
+                        "Database state verified"
+                    ]
 
                 derived.append({
                     "test_key": f"TC-{idx:03d}",
@@ -397,7 +484,7 @@ Decomposed Scenarios:
                     "request_spec": {
                         "method": method,
                         "endpoint": endpoint,
-                        "headers": {"Content-Type": "application/json"},
+                        "headers": req_headers,
                         "body": req_body
                     },
                     "expected_response_spec": {

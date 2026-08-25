@@ -23,8 +23,8 @@ test scenarios. You MUST return a valid JSON object with the following keys:
 Rules:
 1. NEVER invent requirements not stated or implied in the acceptance criteria.
 2. Each scenario MUST trace back to at least one acceptance criterion.
-3. Generate at least 1 positive, 1 negative, and 1 boundary scenario.
-4. Keep scenario descriptions specific and actionable (not generic).
+3. Decompose ALL acceptance criteria thoroughly: generate positive, negative, boundary, validation, and error scenarios covering 100% of the acceptance criteria provided.
+4. Keep scenario descriptions specific, technical, and actionable.
 5. If acceptance criteria are vague, list the ambiguity — do NOT guess.
 """
 
@@ -134,37 +134,37 @@ Acceptance Criteria:
 
     def _fallback_from_acs(self, acs, result):
         """Build scenarios from acceptance criteria when LLM output is unavailable."""
-        positive, negative, boundary = [], [], []
+        positive, negative, boundary, validation, error = [], [], [], [], []
 
         for i, ac in enumerate(acs):
             ac_lower = ac.lower()
-            scenario = {"id": self.nid("SCN"), "desc": ac, "ac_ref": f"AC-{i+1}"}
+            scenario = {"id": self.nid("SCN"), "desc": ac, "ac_ref": f"AC-{i+1:02d}"}
 
             # Heuristic classification based on keywords
             if any(kw in ac_lower for kw in ("reject", "fail", "invalid", "error", "denied",
-                                              "expired", "block", "refuse", "not allowed")):
+                                              "expired", "block", "refuse", "not allowed", "tampered", "missing", "unauthorized")):
                 negative.append(scenario)
             elif any(kw in ac_lower for kw in ("limit", "maximum", "minimum", "boundary",
-                                                "edge", "zero", "overflow", "exactly")):
+                                                "edge", "zero", "overflow", "exactly", "near")):
                 boundary.append(scenario)
+            elif any(kw in ac_lower for kw in ("validate", "format", "schema", "field", "type", "required", "check", "verify")):
+                validation.append(scenario)
+            elif any(kw in ac_lower for kw in ("exception", "crash", "timeout", "500", "unavailable")):
+                error.append(scenario)
             else:
                 positive.append(scenario)
 
-        # Ensure at least one scenario per category
-        if not positive:
-            positive.append({"id": self.nid("SCN"), "desc": f"Happy path for: {acs[0]}"})
-        if not negative:
-            negative.append({"id": self.nid("SCN"), "desc": f"Failure case derived from: {acs[0]}"})
-        if not boundary:
-            boundary.append({"id": self.nid("SCN"), "desc": f"Boundary/limit case for: {acs[0]}"})
+        # Ensure at least one scenario exists
+        if not positive and acs:
+            positive.append({"id": self.nid("SCN"), "desc": f"Happy path for: {acs[0]}", "ac_ref": "AC-01"})
 
         return {
             "business_rules": [],
             "positive_scenarios": positive,
             "negative_scenarios": negative,
             "boundary_scenarios": boundary,
-            "validation_scenarios": [],
-            "error_scenarios": [],
+            "validation_scenarios": validation,
+            "error_scenarios": error,
             "ambiguities": [],
             "traceability_ids": [self.nid("REQ") for _ in acs],
             "model": result.model,
