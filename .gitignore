@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+
+# Agent evidence & generated test artifacts
+evidence_output/
+workspaces/
+tmp/
+
