@@ -173,10 +173,10 @@ def start_workflow():
             except Exception as e:
                 print(f"[Workflow] Failed to export collection: {e}")
 
-    create_run(workflow_id, story["project_id"], story["id"], QUEUED, CREATED,
+    create_run(workflow_id, story["project_id"], story["id"], "RUNNING", REQUIREMENT_ANALYSIS,
                capabilities, state, g.user_id)
     audit("workflow_creation", user_id=g.user_id, workflow_id=workflow_id,
-          project_id=story["project_id"], story_id=story["id"], status="QUEUED")
+          project_id=story["project_id"], story_id=story["id"], status="RUNNING")
 
     task_id, status = dispatch_start(workflow_id, state)
     return ok({"workflow_id": workflow_id, "task_id": task_id, "status": status}, "Workflow started", 201)
@@ -208,6 +208,14 @@ def workflow_status(workflow_id):
     run = get_run(workflow_id)
     if not run:
         return fail("NOT_FOUND", "Workflow not found", 404)
+    
+    # Auto-healing: If workflow is in QUEUED/CREATED, automatically launch background execution
+    if run.get("status") == "QUEUED" and run.get("current_stage") == "CREATED":
+        state = run.get("state_json") or {}
+        dispatch_start(workflow_id, state)
+        run["status"] = "RUNNING"
+        run["current_stage"] = "REQUIREMENT_ANALYSIS"
+
     return ok({
         "workflow_id": workflow_id,
         "status": run["status"],
