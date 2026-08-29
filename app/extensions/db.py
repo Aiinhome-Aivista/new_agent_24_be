@@ -38,7 +38,13 @@ def check_connection():
 
 
 def get_connection():
-    return init_pool().get_connection()
+    pool = init_pool()
+    try:
+        return pool.get_connection()
+    except Exception:
+        import time
+        time.sleep(0.05)
+        return pool.get_connection()
 
 
 def query(sql: str, params: tuple = (), *, fetchone: bool = False):
