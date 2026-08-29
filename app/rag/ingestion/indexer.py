@@ -46,7 +46,9 @@ def ingest_document(
         "file_name": file_name,
         "version": version
     }
-    chunks = chunk_text(text, chunk_size=800, overlap=150, base_metadata=base_meta)
+    chunk_sz = int(getattr(Config, "CHUNK_SIZE", 1000) or 1000)
+    chunk_ovlp = int(getattr(Config, "CHUNK_OVERLAP", 200) or 200)
+    chunks = chunk_text(text, chunk_size=chunk_sz, overlap=chunk_ovlp, base_metadata=base_meta)
 
     # 3. Store chunks in relational database
     vector_ids = []
@@ -72,8 +74,10 @@ def ingest_document(
     # 4. Optional Vector Store Indexing (ChromaDB)
     if Config.VECTOR_STORE == "chromadb" and chunks:
         try:
-            import chromadb
-            from sentence_transformers import SentenceTransformer
+            # pyrefly: ignore [missing-import]
+            import chromadb  # type: ignore[import-untyped, import-not-found]
+            # pyrefly: ignore [missing-import]
+            from sentence_transformers import SentenceTransformer  # type: ignore[import-untyped, import-not-found]
             client = chromadb.PersistentClient(path=Config.CHROMA_PATH)
             embedder = SentenceTransformer(Config.EMBEDDING_MODEL)
             collection = client.get_or_create_collection(f"project_{project_id}")
@@ -108,7 +112,8 @@ def delete_document(doc_uuid: str) -> bool:
 
     if Config.VECTOR_STORE == "chromadb":
         try:
-            import chromadb
+            # pyrefly: ignore [missing-import]
+            import chromadb  # type: ignore[import-untyped, import-not-found]
             client = chromadb.PersistentClient(path=Config.CHROMA_PATH)
             collection = client.get_or_create_collection(f"project_{doc['project_id']}")
             # Delete where doc_uuid matches

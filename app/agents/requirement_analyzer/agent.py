@@ -23,7 +23,7 @@ test scenarios. You MUST return a valid JSON object with the following keys:
 Rules:
 1. NEVER invent requirements not stated or implied in the acceptance criteria.
 2. Each scenario MUST trace back to at least one acceptance criterion.
-3. Decompose ALL acceptance criteria thoroughly: generate positive, negative, boundary, validation, and error scenarios covering 100% of the acceptance criteria provided.
+3. Decompose ALL acceptance criteria thoroughly: generate multiple positive, negative, boundary, validation, and security/error scenarios for every single acceptance criterion. For example, a password strength rule (AC-3) must produce separate scenarios for: too short, missing number, missing special character, 7-char boundary, 8-char boundary, and multiple failures. An authentication rule (AC-6) must produce scenarios for: missing token, invalid signature, malformed token, and expired token.
 4. Keep scenario descriptions specific, technical, and actionable.
 5. If acceptance criteria are vague, list the ambiguity — do NOT guess.
 """
@@ -52,8 +52,16 @@ class RequirementAnalyzerAgent(BaseAgent):
             self._record(workflow_id, "requirement_analysis", status="BLOCKED")
             return state
 
+        print(f"\n[RequirementAnalyzer] Story: '{story.get('title', '')}' (Key: {story.get('external_key', 'N/A')})")
+        print(f"[RequirementAnalyzer] Decomposing {len(acs)} Acceptance Criteria:")
+        for idx, ac in enumerate(acs, start=1):
+            ac_preview = (ac[:80] + "...") if len(ac) > 80 else ac
+            print(f"   • AC-{idx}: {ac_preview}")
+
         # Retrieve RAG context if available
         rag_context = self._get_rag_context(state, text)
+        if rag_context:
+            print(f"[RequirementAnalyzer] Injected {len(rag_context)} chars of RAG knowledge context.")
 
         # Build a rich prompt with story details, acceptance criteria, and RAG context
         ac_text = "\n".join(f"  - AC-{i+1}: {ac}" for i, ac in enumerate(acs))
@@ -70,21 +78,38 @@ Acceptance Criteria:
 
         # Call Gemini for structured analysis
         router = get_router()
+        print(f"[RequirementAnalyzer] Calling LLM ({router._client.__class__.__name__})...")
         result = router.generate_structured(
             "requirement_analysis",
             prompt=prompt,
             system=_SYSTEM_PROMPT)
 
+        print(f"[RequirementAnalyzer] LLM Output Received in {result.latency_ms}ms | Model: {result.model} (is_mock={result.is_mock})")
+
         # Parse the LLM response — use it if valid, fallback if not
         analysis = self._parse_analysis(result, acs)
 
-        total_scenarios = (
-            len(analysis.get("positive_scenarios", []))
-            + len(analysis.get("negative_scenarios", []))
-            + len(analysis.get("boundary_scenarios", []))
-            + len(analysis.get("validation_scenarios", []))
-            + len(analysis.get("error_scenarios", []))
-        )
+        pos_count = len(analysis.get("positive_scenarios", []))
+        neg_count = len(analysis.get("negative_scenarios", []))
+        bnd_count = len(analysis.get("boundary_scenarios", []))
+        val_count = len(analysis.get("validation_scenarios", []))
+        err_count = len(analysis.get("error_scenarios", []))
+        total_scenarios = pos_count + neg_count + bnd_count + val_count + err_count
+        print(f"[RequirementAnalyzer] Decomposed {total_scenarios} Test Scenarios (Pos: {pos_count}, Neg: {neg_count}, Bound: {bnd_count}, Valid: {val_count}, Err: {err_count}):")
+        for cat_name, cat_key in [
+            ("Positive", "positive_scenarios"),
+            ("Negative", "negative_scenarios"),
+            ("Boundary", "boundary_scenarios"),
+            ("Validation", "validation_scenarios"),
+            ("Security/Error", "error_scenarios")
+        ]:
+            scs = analysis.get(cat_key, [])
+            if scs:
+                print(f"   [{cat_name} ({len(scs)})]:")
+                for s in scs:
+                    sid = s.get("id", "SCN") if isinstance(s, dict) else "SCN"
+                    desc = s.get("desc") or s.get("description") if isinstance(s, dict) else str(s)
+                    print(f"     • [{sid}] {desc}")
 
         state["analysis"] = analysis
         state["current_stage"] = SERVICE_PLANNING

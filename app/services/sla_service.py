@@ -115,6 +115,14 @@ def evaluate_workflow_sla(workflow_id):
     estimated_completion_tokens = 0
     for ar in agent_runs:
         out_summary = ar.get("output_summary") or {}
+        if isinstance(out_summary, str):
+            try:
+                out_summary = json.loads(out_summary)
+            except Exception:
+                out_summary = {}
+        if not isinstance(out_summary, dict):
+            out_summary = {}
+
         is_mock = out_summary.get("is_mock", False)
         if not is_mock:
             estimated_prompt_tokens += 1200

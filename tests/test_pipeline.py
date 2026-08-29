@@ -30,7 +30,11 @@ def _initial_state():
         "project": {"id": 1, "target_language": "java", "target_framework": "junit5"},
         "story": {"id": 1, "title": "Authorize a card payment",
                   "description": "reserve funds", "external_key": "PAY-101"},
-        "acceptance_criteria": ["valid card authorizes", "expired card rejected"],
+        "acceptance_criteria": [
+            "valid card authorizes",
+            "expired card rejected",
+            "amount exceeds daily limit rejected",
+        ],
         "api_contracts": [{"method": "POST", "path": "/api/payments/authorize",
                            "service": "AuthorizationService"}],
         "capabilities": ["Test Generation", "API Execution"],

@@ -55,8 +55,10 @@ class ChromaRetriever:
     is_mock = False
 
     def __init__(self):
-        import chromadb  # lazy import; only needed when enabled
-        from sentence_transformers import SentenceTransformer
+        # pyrefly: ignore [missing-import]
+        import chromadb  # type: ignore[import-untyped, import-not-found]
+        # pyrefly: ignore [missing-import]
+        from sentence_transformers import SentenceTransformer  # type: ignore[import-untyped, import-not-found]
         self._client = chromadb.PersistentClient(path=Config.CHROMA_PATH)
         self._embedder = SentenceTransformer(Config.EMBEDDING_MODEL)
 

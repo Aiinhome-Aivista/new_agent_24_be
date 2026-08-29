@@ -48,16 +48,38 @@ class Config:
     # CORS
     CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
 
-    # LLM (Gemini)
-    LLM_PROVIDER = os.getenv("LLM_PROVIDER", "mock")  # mock | gemini
+    # LLM Provider Configuration (Cloud Gemini vs Local Ollama)
+    USE_GEMINI = _bool("USE_GEMINI", "true")
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+    GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
+
+    # Local LLM (Ollama / Custom Endpoint)
+    LLM_API_URL = os.getenv("LLM_API_URL", "")
+    LLM_MODEL = os.getenv("LLM_MODEL", "")
+    LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "300"))
+    LLM_PROVIDER = os.getenv("LLM_PROVIDER", "")
 
     # RAG / Vector store & storage
     VECTOR_STORE = os.getenv("VECTOR_STORE", "mock")  # mock | chromadb
-    CHROMA_PATH = os.getenv("CHROMA_PATH", "./.chroma")
-    EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+    CHROMA_PATH = os.getenv("CHROMA_PATH", "data/chroma_db")
     UPLOAD_PATH = os.getenv("UPLOAD_PATH", "data/uploads")
+    EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+
+    # RAG Chunking & Retrieval Parameters
+    CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1000"))
+    CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "200"))
+    DENSE_TOP_K = int(os.getenv("DENSE_TOP_K", "10"))
+    SPARSE_TOP_K = int(os.getenv("SPARSE_TOP_K", "10"))
+    FUSION_TOP_K = int(os.getenv("FUSION_TOP_K", "10"))
+    RRF_K = int(os.getenv("RRF_K", "60"))
+    RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", "8"))
+    ENABLE_RERANKER = _bool("ENABLE_RERANKER", "true")
+    RERANKER_MODEL = os.getenv("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+
+    # Context Window & Episodic Memory
+    MAX_EPISODIC_EVENTS = int(os.getenv("MAX_EPISODIC_EVENTS", "20"))
+    CONTEXT_COMPACTION_ENABLED = _bool("CONTEXT_COMPACTION_ENABLED", "true")
+    CONTEXT_MAX_CHARACTERS = int(os.getenv("CONTEXT_MAX_CHARACTERS", "20000"))
 
     # Tools
     API_RUNNER = os.getenv("API_RUNNER", "mock")       # mock | newman | bruno

@@ -1,4 +1,5 @@
 import uuid as _uuid
+# pyrefly: ignore [missing-import]
 from flask import Blueprint, request, g
 from app.errors.handlers import ok, fail
 from app.auth.decorators import require_auth, require_permission
@@ -64,33 +65,57 @@ def start_workflow():
                          JOIN services s ON s.id=c.service_id WHERE s.project_id=%s""",
                       (story["project_id"],))
 
-    # If no explicit contracts in DB, derive clean REST endpoints for this story
+    # If no explicit contracts in DB, extract endpoints from ACs or derive clean REST endpoints
     if not contracts:
         story_text = f"{story.get('title', '')} {story.get('description', '')}".lower()
-        if "user" in story_text:
-            endpoint_slug = "users"
-        elif "order" in story_text:
-            endpoint_slug = "orders"
-        elif "account" in story_text:
-            endpoint_slug = "accounts"
-        elif "product" in story_text:
-            endpoint_slug = "products"
-        elif "payment" in story_text:
-            endpoint_slug = "payments"
-        else:
-            clean_name = "".join(c for c in story.get("title", "resource") if c.isalnum() or c in " -_").strip()
-            endpoint_slug = clean_name.lower().replace(" ", "-") or "resources"
-            if not endpoint_slug.endswith("s"):
-                endpoint_slug += "s"
+        ac_combined = " ".join(a.get("text", "") for a in acs)
+        all_text = f"{story_text} {ac_combined.lower()}"
 
-        service_name = (project or {}).get("name", "UserService" if "user" in story_text else "CoreService")
-        contracts = [
-            {"service": service_name, "method": "GET", "path": f"/api/{endpoint_slug}"},
-            {"service": service_name, "method": "POST", "path": f"/api/{endpoint_slug}"},
-            {"service": service_name, "method": "GET", "path": f"/api/{endpoint_slug}/{{id}}"},
-            {"service": service_name, "method": "PUT", "path": f"/api/{endpoint_slug}/{{id}}"},
-            {"service": service_name, "method": "DELETE", "path": f"/api/{endpoint_slug}/{{id}}"},
-        ]
+        # 1. Look for explicit endpoints in Acceptance Criteria (e.g. POST /api/auth/change-password)
+        import re
+        extracted_endpoints = re.findall(r'(GET|POST|PUT|DELETE|PATCH)\s+([/a-zA-Z0-9_\-\/{}\.]+)', ac_combined, re.IGNORECASE)
+        if extracted_endpoints:
+            contracts = []
+            service_name = "AuthService" if any(k in all_text for k in ("auth", "password", "jwt", "login")) else "CoreService"
+            for m, p in extracted_endpoints:
+                clean_p = p.rstrip('`,.')
+                if clean_p.startswith('/'):
+                    contracts.append({
+                        "service": service_name,
+                        "method": m.upper(),
+                        "path": clean_p
+                    })
+
+        if not contracts:
+            if "password" in all_text or "auth" in all_text:
+                service_name = "AuthService"
+                contracts = [
+                    {"service": service_name, "method": "POST", "path": "/api/auth/change-password"},
+                    {"service": service_name, "method": "POST", "path": "/api/auth/login"},
+                ]
+            elif "user" in story_text:
+                endpoint_slug = "users"
+                service_name = (project or {}).get("name", "UserService")
+                contracts = [
+                    {"service": service_name, "method": "GET", "path": f"/api/{endpoint_slug}"},
+                    {"service": service_name, "method": "POST", "path": f"/api/{endpoint_slug}"},
+                    {"service": service_name, "method": "GET", "path": f"/api/{endpoint_slug}/{{id}}"},
+                    {"service": service_name, "method": "PUT", "path": f"/api/{endpoint_slug}/{{id}}"},
+                    {"service": service_name, "method": "DELETE", "path": f"/api/{endpoint_slug}/{{id}}"},
+                ]
+            else:
+                clean_name = "".join(c for c in story.get("title", "resource") if c.isalnum() or c in " -_").strip()
+                endpoint_slug = clean_name.lower().replace(" ", "-") or "resources"
+                if not endpoint_slug.endswith("s"):
+                    endpoint_slug += "s"
+                service_name = (project or {}).get("name", "CoreService")
+                contracts = [
+                    {"service": service_name, "method": "GET", "path": f"/api/{endpoint_slug}"},
+                    {"service": service_name, "method": "POST", "path": f"/api/{endpoint_slug}"},
+                    {"service": service_name, "method": "GET", "path": f"/api/{endpoint_slug}/{{id}}"},
+                    {"service": service_name, "method": "PUT", "path": f"/api/{endpoint_slug}/{{id}}"},
+                    {"service": service_name, "method": "DELETE", "path": f"/api/{endpoint_slug}/{{id}}"},
+                ]
 
     workflow_id = str(_uuid.uuid4())
     state = {

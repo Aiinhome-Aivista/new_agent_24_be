@@ -73,8 +73,13 @@ class Orchestrator:
                 state["current_stage"] = sm.next_stage(stage)
                 continue
 
+            print(f"\n{'='*75}")
+            print(f"[ORCHESTRATOR] >>> Executing Stage: {stage} (Workflow: {workflow_id[:8]})")
+            print(f"{'='*75}")
+
             state = agent.run(workflow_id, state)
             if state.get("status") in sm.EXCEPTION:
+                print(f"[ORCHESTRATOR] Stage {stage} encountered an exception. Status: {state.get('status')}")
                 break
 
         self._persist(workflow_id, state)

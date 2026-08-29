@@ -12,18 +12,20 @@ from app.llm.model_router.router import get_router
 from app.repositories.test_repo import list_test_cases, update_test_case_code_by_key
 from app.workflows.state_machine import API_EXECUTION
 
-_SYSTEM_PROMPT = """You are an expert software engineer generating complete, production-grade test code.
+_SYSTEM_PROMPT = """You are an expert Java Spring Boot Architect specializing in Test-Driven Development (TDD).
 
-Given the test case specification, identified responsible functions, API contracts, and target language/framework:
-1. Generate complete, compilable test code with proper imports, fixtures/annotations, and assertions.
-2. Specifically target and test the RESPONSIBLE FUNCTIONS identified for this test case.
-3. Include inline comments referencing the responsible functions and the Acceptance Criteria.
-4. For negative and boundary test cases, assert specific status codes, error payloads, and exception types.
+Given the test case specification, identified responsible functions, API contracts, and target language/framework (Java Spring Boot with JUnit 5 and Mockito):
+1. Generate complete, compilable, production-ready JUnit 5 test methods.
+2. Follow the standard Arrange-Act-Assert (AAA) pattern.
+3. For Unit/Service tests: Mock external repositories/collaborators using Mockito (`when(...).thenReturn(...)`, `verify(...)`, `doThrow(...)`).
+4. For Controller/API tests: Assert HTTP request/response payloads, status codes (200, 201, 400, 401, 403, 409, 422), and header specifications.
+5. Specifically target and test the RESPONSIBLE FUNCTIONS identified for this test case across the 3-tier architecture (`Controller -> Service -> Repository`).
+6. Include inline comments referencing the Acceptance Criteria and scenario under test.
 
 Target Language: {language}
 Target Framework: {framework}
 
-Return ONLY the complete, compilable test code. Do not include markdown fences (```), extra chat text, or placeholders.
+Return ONLY clean, valid Java test method code without markdown code blocks (```) or conversational filler.
 """
 
 
@@ -56,6 +58,8 @@ class CodeGeneratorAgent(BaseAgent):
         updated_tests = []
         test_code_snippets = []
 
+        print(f"\n[CodeGenerator] Starting Code Synthesis for {len(test_cases)} approved test cases ({lang.upper()} / {framework.upper()})...")
+
         # Generate code for each test case
         for idx, tc in enumerate(test_cases, start=1):
             key = tc.get("test_key", f"TC-{idx:03d}")
@@ -70,6 +74,7 @@ class CodeGeneratorAgent(BaseAgent):
 
             prompt = self._build_prompt(story, tc, resp_funcs, contracts, lang, framework)
 
+            print(f"[CodeGenerator] Synthesizing {key} [{scenario_type.upper()}] targeting {resp_funcs_str}...")
             code_res = router.generate_code(
                 "test_generation",
                 prompt=prompt,
@@ -80,6 +85,8 @@ class CodeGeneratorAgent(BaseAgent):
             generated_code = self._clean_code(code_res.text, lang, framework, key, resp_funcs)
             lines_in_test = len(generated_code.strip().split("\n"))
             total_lines += lines_in_test
+
+            print(f"[CodeGenerator] -> Generated {lines_in_test} lines for {key} in {code_res.latency_ms}ms (is_mock={code_res.is_mock})")
 
             # Persist code to database
             update_test_case_code_by_key(workflow_id, key, generated_code, status="CODE_GENERATED")
@@ -94,8 +101,11 @@ class CodeGeneratorAgent(BaseAgent):
         file_write_info = self._write_test_files(workflow_id, project, story, test_code_snippets, lang, framework, workspace_path, log_entries)
         if file_write_info:
             files_written.extend(file_write_info)
+            for fw in file_write_info:
+                print(f"[CodeGenerator] Written file to workspace: {fw.get('file_path')}")
 
         elapsed_ms = int((time.time() - start_time) * 1000)
+        print(f"[CodeGenerator] Finished code generation in {elapsed_ms}ms. Total lines: {total_lines}.\n")
         log_entries.append(f"[{now_str}] [COMPLETE] Code generation complete in {elapsed_ms}ms. Total lines: {total_lines}. Advancing to API_EXECUTION.")
 
         code_log = {
@@ -283,23 +293,23 @@ Generate a complete, executable {framework} test method in {lang} that explicitl
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import static org.mockito.Mockito.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.Map;
+import java.util.List;
 import java.util.UUID;
 
 /**
- * Auto-generated TDD Test Suite.
+ * Auto-generated Java Spring Boot TDD Test Suite.
  * Verified and approved by Human Reviewer.
  */
+@ExtendWith(MockitoExtension.class)
 public class {class_name} {{
-
-    private TargetService targetService;
-
-    @BeforeEach
-    void setUp() {{
-        targetService = new TargetService();
-    }}
 
 {methods_code}
 }}

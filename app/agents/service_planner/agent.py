@@ -45,6 +45,10 @@ class ServicePlannerAgent(BaseAgent):
         story = state.get("story", {})
         analysis = state.get("analysis", {})
 
+        print(f"\n[ServicePlanner] Planning API architecture and test strategy for {len(contracts)} contracts...")
+        for c in contracts:
+            print(f"   • Endpoint: {c.get('method', 'GET')} {c.get('path', '/')} (Service: {c.get('service', 'Service')})")
+
         # Build a rich prompt with contracts + story context
         contract_lines = []
         for c in contracts:
@@ -63,19 +67,30 @@ Analysis summary:
 """
 
         router = get_router()
+        print(f"[ServicePlanner] Calling LLM ({router._client.__class__.__name__})...")
         result = router.generate_structured(
             "service_planning",
             prompt=prompt,
             system=_SYSTEM_PROMPT)
 
+        print(f"[ServicePlanner] LLM Output Received in {result.latency_ms}ms | Model: {result.model} (is_mock={result.is_mock})")
+
         # Parse LLM response, fallback to contract extraction
         service_plan = self._parse_plan(result, contracts)
+        impacted = service_plan.get("impacted_services", [])
+        print(f"[ServicePlanner] Impacted Microservices: {impacted}")
+        for item in service_plan.get("test_plan", []):
+            svc = item.get("service", "Service")
+            strategy = item.get("test_strategy", "unit/integration")
+            print(f"   • Service '{svc}' (Strategy: {strategy}):")
+            for ep in item.get("endpoints", []):
+                print(f"     - {ep.get('method', 'GET')} {ep.get('path', '/')} [Priority: {ep.get('test_priority', 'high')}]")
 
         state["service_plan"] = service_plan
         state["current_stage"] = TEST_PLANNING
         self._record(workflow_id, "service_planning", model_name=result.model,
                      latency_ms=result.latency_ms,
-                     output_summary={"services": len(service_plan.get("impacted_services", []))})
+                     output_summary={"services": len(impacted)})
         return state
 
     def _parse_plan(self, result, contracts):
