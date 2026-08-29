@@ -3,6 +3,7 @@ Dispatch helper. Uses Celery when a broker is reachable; otherwise runs the work
 inline (development convenience) so the platform is demoable without a worker process.
 """
 import uuid
+import threading
 from app.tasks.workflow_tasks import run_workflow_task, resume_workflow_task
 from app.agents.orchestrator.orchestrator import Orchestrator
 from app.config import Config
@@ -23,8 +24,10 @@ def dispatch_start(workflow_id, state):
     if _broker_available():
         task = run_workflow_task.delay(workflow_id, state)
         return task.id, "QUEUED"
-    _orchestrator.advance(workflow_id, state)   # inline
-    return f"inline-{uuid.uuid4().hex[:8]}", "RUNNING"
+    # Execute asynchronously in background thread so HTTP response returns immediately
+    thread = threading.Thread(target=_orchestrator.advance, args=(workflow_id, state), daemon=True)
+    thread.start()
+    return f"thread-{uuid.uuid4().hex[:8]}", "RUNNING"
 
 
 def dispatch_resume(workflow_id, checkpoint):
@@ -33,5 +36,6 @@ def dispatch_resume(workflow_id, checkpoint):
         return task.id, "RESUMING"
     from app.repositories.workflow_repo import get_run
     run = get_run(workflow_id)
-    _orchestrator.resume(workflow_id, run["state_json"], checkpoint)
-    return f"inline-{uuid.uuid4().hex[:8]}", "RESUMING"
+    thread = threading.Thread(target=_orchestrator.resume, args=(workflow_id, run["state_json"], checkpoint), daemon=True)
+    thread.start()
+    return f"thread-{uuid.uuid4().hex[:8]}", "RESUMING"

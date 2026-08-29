@@ -64,20 +64,27 @@ class Orchestrator:
             # Human checkpoint: create a pending approval and stop.
             if stage in sm.HUMAN_CHECKPOINTS:
                 self._open_checkpoint(workflow_id, stage, state)
+                self._persist(workflow_id, state)
                 break
 
             agent = STAGE_AGENTS.get(stage)
             if agent is None:
-                # Stage with no dedicated agent (CREATED, TEST_PLANNING, CODE_GENERATION,
-                # TRACEABILITY) — advance directly.
+                # Stage with no dedicated agent — advance directly.
                 state["current_stage"] = sm.next_stage(stage)
+                self._persist(workflow_id, state)
                 continue
 
             print(f"\n{'='*75}")
             print(f"[ORCHESTRATOR] >>> Executing Stage: {stage} (Workflow: {workflow_id[:8]})")
             print(f"{'='*75}")
 
+            # Mark as RUNNING and persist current stage
+            state["status"] = sm.RUNNING
+            self._persist(workflow_id, state)
+
             state = agent.run(workflow_id, state)
+            self._persist(workflow_id, state)
+
             if state.get("status") in sm.EXCEPTION:
                 print(f"[ORCHESTRATOR] Stage {stage} encountered an exception. Status: {state.get('status')}")
                 break

@@ -421,7 +421,7 @@ def upload_collection(project_uuid):
 
     if data and isinstance(data, dict):
         # Postman / Standard Collection JSON
-        doc_type = "postman_collection" if "_postman_id" in data.get("info", {}) else "api_contract"
+        doc_type = "postman_collection" if ("_postman_id" in data.get("info", {}) or "schema" in data.get("info", {}) or "item" in data) else "api_contract"
         service_name = data.get("info", {}).get("name", filename.replace(".json", ""))
 
         ingest_document(

@@ -153,7 +153,7 @@ def start_workflow():
     # Find Postman collection path if available
     collection_doc = query("""
         SELECT kd.id FROM knowledge_documents kd
-        WHERE kd.project_id = %s AND kd.doc_type = 'postman_collection'
+        WHERE kd.project_id = %s AND kd.doc_type IN ('postman_collection', 'api_contract')
         ORDER BY kd.created_at DESC LIMIT 1
     """, (story["project_id"],), fetchone=True)
     if collection_doc:
