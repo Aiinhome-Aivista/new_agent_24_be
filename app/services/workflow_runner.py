@@ -24,8 +24,16 @@ def dispatch_start(workflow_id, state):
     if _broker_available():
         task = run_workflow_task.delay(workflow_id, state)
         return task.id, "QUEUED"
-    # Execute asynchronously in background thread so HTTP response returns immediately
-    thread = threading.Thread(target=_orchestrator.advance, args=(workflow_id, state), daemon=True)
+    
+    def _run_start():
+        try:
+            _orchestrator.advance(workflow_id, state)
+        except Exception as e:
+            print(f"[WorkflowRunner] Error in start background thread: {e}")
+            import traceback
+            traceback.print_exc()
+
+    thread = threading.Thread(target=_run_start, daemon=True)
     thread.start()
     return f"thread-{uuid.uuid4().hex[:8]}", "RUNNING"
 
@@ -36,6 +44,18 @@ def dispatch_resume(workflow_id, checkpoint):
         return task.id, "RESUMING"
     from app.repositories.workflow_repo import get_run
     run = get_run(workflow_id)
-    thread = threading.Thread(target=_orchestrator.resume, args=(workflow_id, run["state_json"], checkpoint), daemon=True)
+    if not run:
+        return f"error-{uuid.uuid4().hex[:8]}", "ERROR"
+    state = run.get("state_json") or {}
+
+    def _run_resume():
+        try:
+            _orchestrator.resume(workflow_id, state, checkpoint)
+        except Exception as e:
+            print(f"[WorkflowRunner] Error in resume background thread: {e}")
+            import traceback
+            traceback.print_exc()
+
+    thread = threading.Thread(target=_run_resume, daemon=True)
     thread.start()
     return f"thread-{uuid.uuid4().hex[:8]}", "RESUMING"
