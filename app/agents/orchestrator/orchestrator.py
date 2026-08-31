@@ -12,6 +12,7 @@ from app.agents.api_executor.agent import ApiExecutorAgent
 from app.agents.code_validator.agent import CodeValidatorAgent
 from app.agents.evidence_generator.agent import EvidenceGeneratorAgent
 from app.agents.alm_agent.agent import AlmAgent
+from app.agents.review_agent.agent import ReviewAgent
 from app.repositories.workflow_repo import update_run
 from app.repositories.evidence_repo import create_approval
 from app.audit.audit_log import record as audit
@@ -21,6 +22,7 @@ from app.workflows import state_machine as sm
 STAGE_AGENTS = {
     sm.REQUIREMENT_ANALYSIS: RequirementAnalyzerAgent(),
     sm.SERVICE_PLANNING: ServicePlannerAgent(),
+    sm.TEST_PLANNING: ReviewAgent(),
     sm.TEST_GENERATION: TestGeneratorAgent(),
     sm.CODE_GENERATION: CodeGeneratorAgent(),
     sm.API_EXECUTION: ApiExecutorAgent(),
@@ -34,6 +36,7 @@ STAGE_STATUS = {
     sm.REQUIREMENT_ANALYSIS: sm.RUNNING,
     sm.SERVICE_PLANNING: sm.RUNNING,
     sm.TEST_PLANNING: sm.RUNNING,
+    sm.TEST_PLAN_REVIEW: sm.WAITING_FOR_REVIEW,
     sm.TEST_GENERATION: sm.RUNNING,
     sm.TEST_REVIEW: sm.WAITING_FOR_REVIEW,
     sm.CODE_GENERATION: sm.RUNNING,
@@ -102,6 +105,7 @@ class Orchestrator:
     def _open_checkpoint(self, workflow_id, stage, state):
         import uuid
         stage_to_approval = {
+            sm.TEST_PLAN_REVIEW: "TEST_PLAN_REVIEW",
             sm.TEST_REVIEW: "TEST_REVIEW",
             sm.EVIDENCE_REVIEW: "EVIDENCE_REVIEW",
             sm.ALM_APPROVAL: "ALM_APPROVAL",
