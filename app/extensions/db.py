@@ -22,6 +22,7 @@ def init_pool():
                 password=Config.MYSQL_PASSWORD,
                 autocommit=False,
                 connection_timeout=10,
+                init_command="SET SESSION wait_timeout = 30, SESSION interactive_timeout = 30",
             )
             print(f"[Database] Connection successful: connected to {Config.MYSQL_DATABASE} on {Config.MYSQL_HOST}:{Config.MYSQL_PORT}")
         except Exception as e:
