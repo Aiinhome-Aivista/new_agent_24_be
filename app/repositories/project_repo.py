@@ -65,6 +65,9 @@ def create_story(uuid, project_id, external_key, title, description, sprint="Spr
     """, (uuid, project_id, external_key, title, description, sprint, created_by), return_id=True)
 
 
+from app.config.settings import Config
+
+
 def story_acceptance_criteria(story_id):
     return query("SELECT uuid, ac_key, text, created_at FROM acceptance_criteria WHERE story_id=%s ORDER BY ac_key", (story_id,))
 
@@ -74,6 +77,65 @@ def create_acceptance_criterion(uuid, story_id, ac_key, text):
         INSERT INTO acceptance_criteria (uuid, story_id, ac_key, text)
         VALUES (%s, %s, %s, %s)
     """, (uuid, story_id, ac_key, text), return_id=True)
+
+
+def delete_story(uuid):
+    """Deletes a story, its acceptance criteria, workflow runs, child tests, and vector/knowledge data."""
+    s = get_story(uuid)
+    if not s:
+        return False
+    story_id = s["id"]
+    project_id = s["project_id"]
+    external_key = s.get("external_key")
+
+    try:
+        # 1. Clean workflow runs and child test cases / tasks associated with this story
+        execute("DELETE FROM execution_results WHERE test_case_id IN (SELECT id FROM test_cases WHERE story_id=%s)", (story_id,))
+        execute("DELETE FROM test_cases WHERE story_id=%s", (story_id,))
+        execute("DELETE FROM workflow_tasks WHERE workflow_id IN (SELECT workflow_id FROM workflow_runs WHERE story_id=%s)", (story_id,))
+        execute("DELETE FROM evidence_packages WHERE story_id=%s OR workflow_id IN (SELECT workflow_id FROM workflow_runs WHERE story_id=%s)", (story_id, story_id))
+        execute("DELETE FROM workflow_runs WHERE story_id=%s", (story_id,))
+
+        # 2. Clean acceptance criteria
+        execute("DELETE FROM acceptance_criteria WHERE story_id=%s", (story_id,))
+
+        # 3. Clean any story-related knowledge documents or chunks
+        if external_key:
+            docs = query("SELECT id, uuid FROM knowledge_documents WHERE project_id=%s AND (title LIKE %s OR title LIKE %s)",
+                         (project_id, f"%{external_key}%", f"%{s.get('title', '')[:30]}%"))
+            if docs:
+                for doc in docs:
+                    execute("DELETE FROM knowledge_chunks WHERE document_id=%s", (doc["id"],))
+                    execute("DELETE FROM knowledge_documents WHERE id=%s", (doc["id"],))
+                    if Config.VECTOR_STORE == "chromadb":
+                        try:
+                            # pyrefly: ignore [missing-import]
+                            import chromadb  # type: ignore[import-untyped, import-not-found]
+                            client = chromadb.PersistentClient(path=Config.CHROMA_PATH)
+                            collection = client.get_or_create_collection(f"project_{project_id}")
+                            collection.delete(where={"doc_uuid": doc["uuid"]})
+                        except Exception:
+                            pass
+
+        # 4. Clean vector store entries directly for this story if any
+        if Config.VECTOR_STORE == "chromadb" and external_key:
+            try:
+                # pyrefly: ignore [missing-import]
+                import chromadb  # type: ignore[import-untyped, import-not-found]
+                client = chromadb.PersistentClient(path=Config.CHROMA_PATH)
+                collection = client.get_or_create_collection(f"project_{project_id}")
+                collection.delete(where={"story_key": external_key})
+            except Exception:
+                pass
+
+        # 5. Delete story record
+        execute("DELETE FROM stories WHERE id=%s", (story_id,))
+        return True
+    except Exception as e:
+        print(f"[ProjectRepo] Error deleting story {uuid}: {e}")
+        # Fallback direct delete
+        execute("DELETE FROM stories WHERE id=%s", (story_id,))
+        return True
 
 
 def list_knowledge_documents(project_id):
@@ -99,7 +161,46 @@ def list_services_and_contracts(project_id):
         WHERE s.project_id=%s
         ORDER BY s.name, c.path
     """, (project_id,))
-    return {"services": services, "contracts": contracts}
+    return {"services": services or [], "contracts": contracts or []}
+
+
+def delete_project(uuid):
+    p = get_project(uuid)
+    if not p:
+        return False
+    pid = p["id"]
+
+    try:
+        # 1. Clean workflow runs and child test cases / tasks
+        execute("DELETE FROM execution_results WHERE test_case_id IN (SELECT id FROM test_cases WHERE workflow_id IN (SELECT workflow_id FROM workflow_runs WHERE project_id=%s))", (pid,))
+        execute("DELETE FROM test_cases WHERE workflow_id IN (SELECT workflow_id FROM workflow_runs WHERE project_id=%s)", (pid,))
+        execute("DELETE FROM workflow_tasks WHERE workflow_id IN (SELECT workflow_id FROM workflow_runs WHERE project_id=%s)", (pid,))
+        execute("DELETE FROM evidence_packages WHERE workflow_id IN (SELECT workflow_id FROM workflow_runs WHERE project_id=%s)", (pid,))
+        execute("DELETE FROM workflow_runs WHERE project_id=%s", (pid,))
+
+        # 2. Clean stories and ACs
+        execute("DELETE FROM acceptance_criteria WHERE story_id IN (SELECT id FROM stories WHERE project_id=%s)", (pid,))
+        execute("DELETE FROM stories WHERE project_id=%s", (pid,))
+
+        # 3. Clean knowledge docs and chunks
+        execute("DELETE FROM knowledge_chunks WHERE document_id IN (SELECT id FROM knowledge_documents WHERE project_id=%s)", (pid,))
+        execute("DELETE FROM knowledge_documents WHERE project_id=%s", (pid,))
+
+        # 4. Clean API contracts and services
+        execute("DELETE FROM api_contracts WHERE service_id IN (SELECT id FROM services WHERE project_id=%s)", (pid,))
+        execute("DELETE FROM services WHERE project_id=%s", (pid,))
+
+        # 5. Clean project members
+        execute("DELETE FROM project_members WHERE project_id=%s", (pid,))
+
+        # 6. Delete project
+        execute("DELETE FROM projects WHERE id=%s", (pid,))
+        return True
+    except Exception as e:
+        print(f"[ProjectRepo] Error deleting project {uuid}: {e}")
+        # Fallback direct delete if FK cascades handle it
+        execute("DELETE FROM projects WHERE id=%s", (pid,))
+        return True
 
 
 def create_service(uuid, project_id, name, description):

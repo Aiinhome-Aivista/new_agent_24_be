@@ -1,12 +1,13 @@
 """Project, Story, Knowledge Base, and API Contract routes."""
 import uuid as _uuid
 import json
+# pyrefly: ignore [missing-import]
 from flask import Blueprint, request, g
 from app.errors.handlers import ok, fail
 from app.auth.decorators import require_auth, require_permission
 from app.repositories.project_repo import (
-    list_projects, get_project, create_project,
-    list_stories, get_story, create_story,
+    list_projects, get_project, create_project, delete_project,
+    list_stories, get_story, create_story, delete_story,
     story_acceptance_criteria, create_acceptance_criterion,
     list_knowledge_documents, list_services_and_contracts,
     create_service, create_api_contract
@@ -53,6 +54,20 @@ def project_detail(uuid):
         "contracts": list_services_and_contracts(p["id"]),
         "workflows": workflows or []
     })
+
+
+@project_bp.route("/projects/<uuid>", methods=["DELETE"])
+@require_auth
+@require_permission("project.write")
+def remove_project(uuid):
+    p = get_project(uuid)
+    if not p:
+        return fail("NOT_FOUND", "Project not found", 404)
+    audit("project_deletion", user_id=getattr(g, "user_id", None), project_id=p["id"], status="SUCCESS", metadata={"project_uuid": uuid, "project_name": p.get("name")})
+    success = delete_project(uuid)
+    if success:
+        return ok({"message": f"Project '{p.get('name')}' deleted successfully", "uuid": uuid})
+    return fail("DELETE_FAILED", "Failed to delete project", 500)
 
 
 @project_bp.route("/projects", methods=["POST"])
@@ -180,6 +195,22 @@ def story_detail(uuid):
         return fail("NOT_FOUND", "Story not found", 404)
     acs = story_acceptance_criteria(s["id"]) if s else []
     return ok({"story": s, "acceptance_criteria": acs})
+
+
+@project_bp.route("/stories/<uuid>", methods=["DELETE"])
+@require_auth
+@require_permission("story.write")
+def remove_story(uuid):
+    s = get_story(uuid)
+    if not s:
+        return fail("NOT_FOUND", "Story not found", 404)
+    user_id = getattr(g, "user_id", None)
+    audit("story_deletion", user_id=user_id, project_id=s["project_id"], story_id=s["id"],
+          status="SUCCESS", metadata={"story_uuid": uuid, "external_key": s.get("external_key"), "title": s.get("title")})
+    success = delete_story(uuid)
+    if success:
+        return ok({"message": f"Story '{s.get('external_key')}' and all associated data deleted successfully", "uuid": uuid})
+    return fail("DELETE_FAILED", "Failed to delete story", 500)
 
 
 @project_bp.route("/stories", methods=["POST"])

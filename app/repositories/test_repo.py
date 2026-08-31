@@ -3,21 +3,40 @@ import json
 from app.extensions.db import query, execute
 
 
+_SCHEMA_CHECKED = False
+
+
 def _ensure_schema():
-    """Ensure optional columns exist in test_cases table."""
+    """Ensure all industry-standard QA columns exist in test_cases table (runs once per process)."""
+    global _SCHEMA_CHECKED
+    if _SCHEMA_CHECKED:
+        return
     try:
-        cols_rf = query("SHOW COLUMNS FROM test_cases LIKE 'responsible_functions'")
-        if not cols_rf:
-            execute("ALTER TABLE test_cases ADD COLUMN responsible_functions TEXT NULL")
-        cols_sr = query("SHOW COLUMNS FROM test_cases LIKE 'story_reference'")
-        if not cols_sr:
-            execute("ALTER TABLE test_cases ADD COLUMN story_reference TEXT NULL")
-        cols_req = query("SHOW COLUMNS FROM test_cases LIKE 'request_spec'")
-        if not cols_req:
-            execute("ALTER TABLE test_cases ADD COLUMN request_spec TEXT NULL")
-        cols_res = query("SHOW COLUMNS FROM test_cases LIKE 'expected_response_spec'")
-        if not cols_res:
-            execute("ALTER TABLE test_cases ADD COLUMN expected_response_spec TEXT NULL")
+        column_defs = [
+            ("responsible_functions", "TEXT NULL"),
+            ("story_reference", "TEXT NULL"),
+            ("request_spec", "TEXT NULL"),
+            ("expected_response_spec", "TEXT NULL"),
+            ("test_type", "VARCHAR(50) DEFAULT 'API'"),
+            ("preconditions", "TEXT NULL"),
+            ("test_data", "TEXT NULL"),
+            ("test_steps", "TEXT NULL"),
+            ("grounding_metadata", "TEXT NULL"),
+            ("requires_review", "TINYINT(1) DEFAULT 0"),
+            ("assumption_details", "TEXT NULL"),
+            ("acceptance_criteria_ids", "TEXT NULL"),
+            ("expected_status_code", "INT NULL"),
+            ("test_data_source", "VARCHAR(50) DEFAULT 'AI_DERIVED'"),
+            ("responsible_functions_source", "VARCHAR(50) DEFAULT 'UNKNOWN'"),
+        ]
+        for col_name, col_type in column_defs:
+            exists = query(f"SHOW COLUMNS FROM test_cases LIKE '{col_name}'")
+            if not exists:
+                try:
+                    execute(f"ALTER TABLE test_cases ADD COLUMN {col_name} {col_type}")
+                except Exception as ex:
+                    print(f"[test_repo] Alter column {col_name} note: {ex}")
+        _SCHEMA_CHECKED = True
     except Exception as e:
         print(f"[test_repo] Schema check warning: {e}")
 
@@ -25,10 +44,7 @@ def _ensure_schema():
 def insert_test_case(uuid, workflow_id, story_id, tc):
     _ensure_schema()
     resp_funcs = tc.get("responsible_functions", [])
-    if isinstance(resp_funcs, list):
-        resp_funcs_str = json.dumps(resp_funcs)
-    else:
-        resp_funcs_str = str(resp_funcs) if resp_funcs else "[]"
+    resp_funcs_str = json.dumps(resp_funcs) if isinstance(resp_funcs, list) else (str(resp_funcs) if resp_funcs else "[]")
 
     story_ref = tc.get("story_reference", "")
     req_spec = tc.get("request_spec")
@@ -37,30 +53,68 @@ def insert_test_case(uuid, workflow_id, story_id, tc):
     res_spec = tc.get("expected_response_spec")
     res_spec_str = json.dumps(res_spec) if isinstance(res_spec, dict) else (str(res_spec) if res_spec else None)
 
+    test_type = tc.get("test_type", "API")
+    preconditions = tc.get("preconditions")
+    precond_str = json.dumps(preconditions) if isinstance(preconditions, (list, dict)) else (str(preconditions) if preconditions else None)
+
+    test_data = tc.get("test_data")
+    test_data_str = json.dumps(test_data) if isinstance(test_data, (list, dict)) else (str(test_data) if test_data else None)
+
+    test_steps = tc.get("test_steps")
+    test_steps_str = json.dumps(test_steps) if isinstance(test_steps, (list, dict)) else (str(test_steps) if test_steps else None)
+
+    grounding_meta = tc.get("grounding_metadata")
+    grounding_str = json.dumps(grounding_meta) if isinstance(grounding_meta, dict) else (str(grounding_meta) if grounding_meta else None)
+
+    requires_review = 1 if tc.get("requires_review") else 0
+    assumption_details = tc.get("assumption_details")
+
+    ac_ids = tc.get("acceptance_criteria_ids", [])
+    ac_ids_str = json.dumps(ac_ids) if isinstance(ac_ids, list) else (str(ac_ids) if ac_ids else None)
+
+    exp_status = tc.get("expected_status_code")
+    if exp_status is None and res_spec and isinstance(res_spec, dict):
+        exp_status = res_spec.get("status_code")
+    try:
+        exp_status_int = int(exp_status) if exp_status is not None and str(exp_status).isdigit() else None
+    except Exception:
+        exp_status_int = None
+
+    test_data_source = tc.get("test_data_source", "AI_DERIVED")
+    resp_funcs_source = tc.get("responsible_functions_source", "UNKNOWN")
+
     try:
         return execute("""INSERT INTO test_cases
             (uuid, workflow_id, story_id, test_key, scenario_type, title, description,
              expected_result, priority, risk, origin, status, generated_code, target_language, framework,
-             responsible_functions, story_reference, request_spec, expected_response_spec)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+             responsible_functions, story_reference, request_spec, expected_response_spec,
+             test_type, preconditions, test_data, test_steps, grounding_metadata,
+             requires_review, assumption_details, acceptance_criteria_ids, expected_status_code,
+             test_data_source, responsible_functions_source)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
             (uuid, workflow_id, story_id, tc["test_key"], tc["scenario_type"], tc["title"],
              tc.get("description"), tc.get("expected_result"), tc.get("priority", "medium"),
              tc.get("risk", "medium"), tc.get("origin", "AI_GENERATED"),
              tc.get("status", "AWAITING_REVIEW"), tc.get("generated_code"),
              tc.get("target_language"), tc.get("framework"), resp_funcs_str, story_ref,
-             req_spec_str, res_spec_str), return_id=True)
+             req_spec_str, res_spec_str, test_type, precond_str, test_data_str,
+             test_steps_str, grounding_str, requires_review, assumption_details, ac_ids_str, exp_status_int,
+             test_data_source, resp_funcs_source),
+            return_id=True)
     except Exception:
-        # Fallback with subset of columns
+        # Resilient fallback with subset of columns
         try:
             return execute("""INSERT INTO test_cases
                 (uuid, workflow_id, story_id, test_key, scenario_type, title, description,
-                 expected_result, priority, risk, origin, status, generated_code, target_language, framework, responsible_functions, story_reference)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                 expected_result, priority, risk, origin, status, generated_code, target_language, framework,
+                 responsible_functions, story_reference, request_spec, expected_response_spec)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (uuid, workflow_id, story_id, tc["test_key"], tc["scenario_type"], tc["title"],
                  tc.get("description"), tc.get("expected_result"), tc.get("priority", "medium"),
                  tc.get("risk", "medium"), tc.get("origin", "AI_GENERATED"),
                  tc.get("status", "AWAITING_REVIEW"), tc.get("generated_code"),
-                 tc.get("target_language"), tc.get("framework"), resp_funcs_str, story_ref), return_id=True)
+                 tc.get("target_language"), tc.get("framework"), resp_funcs_str, story_ref,
+                 req_spec_str, res_spec_str), return_id=True)
         except Exception:
             return execute("""INSERT INTO test_cases
                 (uuid, workflow_id, story_id, test_key, scenario_type, title, description,
@@ -78,28 +132,21 @@ def list_test_cases(workflow_id):
     if not rows:
         return []
     for r in rows:
-        rf = r.get("responsible_functions")
-        if rf and isinstance(rf, str):
-            try:
-                r["responsible_functions"] = json.loads(rf)
-            except Exception:
-                r["responsible_functions"] = [rf]
-        elif not rf:
+        for json_col in ("responsible_functions", "request_spec", "expected_response_spec",
+                         "preconditions", "test_data", "test_steps", "grounding_metadata",
+                         "acceptance_criteria_ids"):
+            val = r.get(json_col)
+            if val and isinstance(val, str):
+                try:
+                    r[json_col] = json.loads(val)
+                except Exception:
+                    pass
+        if not r.get("responsible_functions"):
             r["responsible_functions"] = []
-
-        req = r.get("request_spec")
-        if req and isinstance(req, str):
-            try:
-                r["request_spec"] = json.loads(req)
-            except Exception:
-                pass
-
-        res = r.get("expected_response_spec")
-        if res and isinstance(res, str):
-            try:
-                r["expected_response_spec"] = json.loads(res)
-            except Exception:
-                pass
+        if not r.get("test_type"):
+            r["test_type"] = "API"
+        if r.get("requires_review") is not None:
+            r["requires_review"] = bool(r["requires_review"])
     return rows
 
 

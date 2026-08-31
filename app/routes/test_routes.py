@@ -11,7 +11,30 @@ test_bp = Blueprint("tests", __name__)
 @require_auth
 @require_permission("workflow.read")
 def test_cases(workflow_id):
-    return ok({"test_cases": list_test_cases(workflow_id)})
+    tcs = list_test_cases(workflow_id)
+    from app.repositories.workflow_repo import get_run
+    import json as _json
+    run = get_run(workflow_id)
+    coverage_matrix = []
+    generation_summary = None
+    contract_gaps = []
+    if run:
+        state = run.get("state_json") or {}
+        if isinstance(state, str):
+            try:
+                state = _json.loads(state)
+            except Exception:
+                state = {}
+        coverage_matrix = state.get("coverage_matrix", [])
+        generation_summary = state.get("generation_summary")
+        contract_gaps = state.get("contract_gaps", [])
+
+    return ok({
+        "test_cases": tcs,
+        "coverage_matrix": coverage_matrix,
+        "generation_summary": generation_summary,
+        "contract_gaps": contract_gaps
+    })
 
 
 @test_bp.route("/test-cases/<uuid>/status", methods=["POST"])

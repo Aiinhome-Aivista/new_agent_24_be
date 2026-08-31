@@ -60,6 +60,32 @@ class CodeGeneratorAgent(BaseAgent):
 
         print(f"\n[CodeGenerator] Starting Code Synthesis for {len(test_cases)} approved test cases ({lang.upper()} / {framework.upper()})...")
 
+        # Detect workspace context and package information
+        ws_obj = None
+        detected_package = "com.app.tests" if lang in ("java", "kotlin") else ""
+        resolved_imports = []
+        if workspace_path and os.path.isdir(workspace_path):
+            try:
+                from app.tools.repository.workspace import GitWorkspace
+                project_uuid = project.get("uuid", "")
+                ws_obj = GitWorkspace(project_uuid, project.get("git_repo_url", ""))
+                detected_package = ws_obj.find_root_package(lang=lang)
+                log_entries.append(f"[{now_str}] [WORKSPACE] Detected root package from codebase: {detected_package}")
+            except Exception as ex:
+                print(f"[CodeGenerator] Package discovery note: {ex}")
+
+        # Resolve class imports for all responsible functions
+        all_resp_funcs = []
+        for tc in test_cases:
+            all_resp_funcs.extend(tc.get("responsible_functions") or [])
+        if ws_obj and all_resp_funcs:
+            try:
+                resolved_imports = ws_obj.resolve_imports_for_functions(all_resp_funcs, lang=lang)
+                if resolved_imports:
+                    log_entries.append(f"[{now_str}] [IMPORTS] Resolved {len(resolved_imports)} class imports from codebase")
+            except Exception as ex:
+                print(f"[CodeGenerator] Import resolution note: {ex}")
+
         # Generate code for each test case
         for idx, tc in enumerate(test_cases, start=1):
             key = tc.get("test_key", f"TC-{idx:03d}")
@@ -72,7 +98,7 @@ class CodeGeneratorAgent(BaseAgent):
             log_entries.append(f"[{now_str}] [SYNTHESIS] Generating test method for {key} ({scenario_type.upper()})")
             log_entries.append(f"[{now_str}] [TARGET] Responsible functions: {resp_funcs_str}")
 
-            prompt = self._build_prompt(story, tc, resp_funcs, contracts, lang, framework)
+            prompt = self._build_prompt(story, tc, resp_funcs, contracts, lang, framework, detected_package)
 
             print(f"[CodeGenerator] Synthesizing {key} [{scenario_type.upper()}] targeting {resp_funcs_str}...")
             code_res = router.generate_code(
@@ -98,7 +124,18 @@ class CodeGeneratorAgent(BaseAgent):
             log_entries.append(f"[{now_str}] [SUCCESS] Synthesized {key} ({lines_in_test} lines) targeting {resp_funcs_str}")
 
         # Assemble full test file and write to workspace
-        file_write_info = self._write_test_files(workflow_id, project, story, test_code_snippets, lang, framework, workspace_path, log_entries)
+        file_write_info = self._write_test_files(
+            workflow_id=workflow_id,
+            project=project,
+            story=story,
+            test_code_snippets=test_code_snippets,
+            lang=lang,
+            framework=framework,
+            workspace_path=workspace_path,
+            log_entries=log_entries,
+            package_name=detected_package,
+            custom_imports=resolved_imports
+        )
         if file_write_info:
             files_written.extend(file_write_info)
             for fw in file_write_info:
@@ -113,6 +150,8 @@ class CodeGeneratorAgent(BaseAgent):
             "generated_at": now_str,
             "target_language": lang,
             "target_framework": framework,
+            "root_package": detected_package,
+            "resolved_imports": resolved_imports,
             "total_tests_generated": len(updated_tests),
             "total_lines_generated": total_lines,
             "elapsed_ms": elapsed_ms,
@@ -128,9 +167,10 @@ class CodeGeneratorAgent(BaseAgent):
                      latency_ms=total_latency, output_summary={"total_lines": total_lines, "tests": len(updated_tests)})
         return state
 
-    def _build_prompt(self, story, tc, resp_funcs, contracts, lang, framework):
+    def _build_prompt(self, story, tc, resp_funcs, contracts, lang, framework, package_name="com.app.tests"):
         resp_funcs_text = "\n".join(f"  - {f}" for f in resp_funcs) if resp_funcs else "  - Primary service handler"
         contract_text = "\n".join(f"  - {c.get('method', 'GET')} {c.get('path', '/')} (service: {c.get('service', 'unknown')})" for c in contracts[:4])
+        pkg_info = f"\nRoot Package: {package_name}" if package_name else ""
 
         return f"""User Story: {story.get('title', '')}
 Story Description: {story.get('description', '')}
@@ -138,7 +178,7 @@ Story Description: {story.get('description', '')}
 Test Case: {tc.get('test_key')} — {tc.get('title')}
 Scenario Type: {tc.get('scenario_type', 'positive').upper()}
 Description: {tc.get('description', '')}
-Expected Result: {tc.get('expected_result', '')}
+Expected Result: {tc.get('expected_result', '')}{pkg_info}
 
 Responsible Functions / Target Methods to Test:
 {resp_funcs_text}
@@ -220,7 +260,7 @@ Generate a complete, executable {framework} test method in {lang} that explicitl
     expect(response.body).toHaveProperty('data');
   }});"""
 
-    def _write_test_files(self, workflow_id, project, story, test_code_snippets, lang, framework, workspace_path, log_entries):
+    def _write_test_files(self, workflow_id, project, story, test_code_snippets, lang, framework, workspace_path, log_entries, package_name="com.app.tests", custom_imports=None):
         """Write synthesized test code files to project workspace and evidence directories."""
         files_info = []
         now_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -229,13 +269,20 @@ Generate a complete, executable {framework} test method in {lang} that explicitl
         story_slug = story.get("title", "App").replace(" ", "")
         story_slug = "".join(c for c in story_slug if c.isalnum()) or "AppService"
         
-        ext_map = {"java": "java", "python": "py", "typescript": "ts", "javascript": "js"}
+        ext_map = {"java": "java", "kotlin": "kt", "python": "py", "typescript": "ts", "javascript": "js"}
         ext = ext_map.get(lang, "java")
         class_name = f"{story_slug}Test"
         file_name = f"{class_name}.{ext}" if lang != "python" else f"test_{story_slug.lower()}.py"
 
         # Combine all test methods into a class/module
-        assembled_content = self._assemble_test_file(class_name, test_code_snippets, lang, framework)
+        assembled_content = self._assemble_test_file(
+            class_name=class_name,
+            test_code_snippets=test_code_snippets,
+            lang=lang,
+            framework=framework,
+            package_name=package_name,
+            custom_imports=custom_imports
+        )
 
         # 1. Write to evidence output folder
         evidence_dir = Path("evidence_output") / "generated_tests" / workflow_id
@@ -258,9 +305,10 @@ Generate a complete, executable {framework} test method in {lang} that explicitl
         # 2. Write to project Git workspace if workspace path is present
         if workspace_path and os.path.isdir(workspace_path):
             ws_root = Path(workspace_path)
-            # Find or create test directory
-            if lang == "java":
-                test_dir = ws_root / "src" / "test" / "java" / "com" / "example" / "tests"
+            # Find or create test directory dynamically based on package
+            if lang in ("java", "kotlin"):
+                pkg_subpath = Path(*package_name.split(".")) if package_name else Path("com", "app", "tests")
+                test_dir = ws_root / "src" / "test" / "java" / pkg_subpath
             elif lang == "python":
                 test_dir = ws_root / "tests"
             else:
@@ -284,11 +332,15 @@ Generate a complete, executable {framework} test method in {lang} that explicitl
 
         return files_info
 
-    def _assemble_test_file(self, class_name, test_code_snippets, lang, framework):
+    def _assemble_test_file(self, class_name, test_code_snippets, lang, framework, package_name="com.app.tests", custom_imports=None):
         methods_code = "\n\n".join(snippet[3] for snippet in test_code_snippets)
+        custom_imports_str = "\n".join(custom_imports) if custom_imports else ""
+        if custom_imports_str:
+            custom_imports_str = "\n" + custom_imports_str
         
         if lang in ("java", "kotlin"):
-            return f"""package com.example.tests;
+            pkg_header = f"package {package_name};" if package_name else "package com.app.tests;"
+            return f"""{pkg_header}
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -302,7 +354,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.Map;
 import java.util.List;
-import java.util.UUID;
+import java.util.UUID;{custom_imports_str}
 
 /**
  * Auto-generated Java Spring Boot TDD Test Suite.
@@ -320,7 +372,7 @@ Auto-generated TDD Test Suite.
 Verified and approved by Human Reviewer.
 \"\"\"
 import pytest
-import uuid
+import uuid{custom_imports_str}
 
 {methods_code}
 """
@@ -329,7 +381,7 @@ import uuid
  * Auto-generated TDD Test Suite.
  * Verified and approved by Human Reviewer.
  */
-import request from 'supertest';
+import request from 'supertest';{custom_imports_str}
 
 describe('{class_name}', () => {{
 {methods_code}

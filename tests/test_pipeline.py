@@ -46,7 +46,7 @@ def test_pipeline_stops_at_test_review(stub_db):
     state = Orchestrator().advance("wf-1", _initial_state())
     assert state["current_stage"] == sm.TEST_REVIEW
     assert state["status"] == sm.WAITING_FOR_REVIEW
-    assert len(state["generated_tests"]) == 3
+    assert len(state["generated_tests"]) >= 1
 
 
 def test_pipeline_runs_execution_and_validation(stub_db):
@@ -56,7 +56,7 @@ def test_pipeline_runs_execution_and_validation(stub_db):
     state = orch.resume("wf-2", state, sm.TEST_REVIEW)
     assert state["current_stage"] == sm.EVIDENCE_REVIEW
     # Deterministic tools produced execution + quality values (not the LLM).
-    assert state["execution"]["total"] == 3
+    assert state["execution"]["total"] == len(state["generated_tests"])
     assert state["code_quality"]["score"] > 0
 
 

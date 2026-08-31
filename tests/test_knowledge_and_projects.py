@@ -69,6 +69,10 @@ def test_create_project_and_isolation(client, auth_headers):
     assert "dual director approval" in chunks_b[0]["content"]
     assert "2FA hardware token" not in chunks_b[0]["content"]
 
+    # Cleanup test projects so they don't clutter the UI
+    client.delete(f"/api/v1/projects/{uuid_a}", headers=auth_headers)
+    client.delete(f"/api/v1/projects/{uuid_b}", headers=auth_headers)
+
 
 def test_create_story_with_acceptance_criteria(client, auth_headers):
     # Fetch projects

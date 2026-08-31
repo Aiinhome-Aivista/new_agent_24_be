@@ -229,3 +229,117 @@ class GitWorkspace:
                 continue
 
         return "\n\n".join(parts)
+
+    def find_root_package(self, lang: str = "java") -> str:
+        """Detect the root package name from codebase (e.g. 'com.poc.crud' for Java)."""
+        if not self.exists:
+            return "com.app.tests" if lang in ("java", "kotlin") else ""
+
+        ws = self.workspace_path
+        if lang in ("java", "kotlin"):
+            # 1. Search for *Application.java or files in src/main/java
+            src_main_java = ws / "src" / "main" / "java"
+            if src_main_java.exists():
+                # Look for Spring Boot Application class first
+                for p in src_main_java.rglob("*.java"):
+                    if p.name.endswith("Application.java") or p.name.endswith("App.java"):
+                        try:
+                            content = p.read_text(encoding="utf-8", errors="replace")
+                            for line in content.split("\n"):
+                                line = line.strip()
+                                if line.startswith("package ") and line.endswith(";"):
+                                    return line.replace("package ", "").replace(";", "").strip()
+                        except Exception:
+                            pass
+                # Any java file in src/main/java
+                for p in src_main_java.rglob("*.java"):
+                    try:
+                        content = p.read_text(encoding="utf-8", errors="replace")
+                        for line in content.split("\n"):
+                            line = line.strip()
+                            if line.startswith("package ") and line.endswith(";"):
+                                full_pkg = line.replace("package ", "").replace(";", "").strip()
+                                parts = full_pkg.split(".")
+                                if len(parts) >= 2:
+                                    return ".".join(parts[:3]) if len(parts) >= 3 else ".".join(parts[:2])
+                    except Exception:
+                        pass
+
+            # 2. Fallback to pom.xml groupId
+            pom_path = ws / "pom.xml"
+            if pom_path.exists():
+                try:
+                    import xml.etree.ElementTree as ET
+                    tree = ET.parse(pom_path)
+                    root = tree.getroot()
+                    # Remove namespace prefix if present
+                    ns = {"mvn": root.tag.split("}")[0].strip("{")} if "}" in root.tag else {}
+                    gid_elem = root.find("mvn:groupId", ns) if ns else root.find("groupId")
+                    if gid_elem is not None and gid_elem.text:
+                        return gid_elem.text.strip()
+                except Exception:
+                    pass
+
+            return "com.app.tests"
+
+        elif lang == "python":
+            for d in ["src", "app"]:
+                if (ws / d).is_dir():
+                    return d
+            return "app"
+
+        return ""
+
+    def find_class_import(self, class_name: str, lang: str = "java") -> str:
+        """Find the full import path for a given class name in the codebase."""
+        if not self.exists or not class_name:
+            return ""
+
+        ws = self.workspace_path
+        if lang in ("java", "kotlin"):
+            src_main_java = ws / "src" / "main" / "java"
+            if src_main_java.exists():
+                for p in src_main_java.rglob(f"{class_name}.java"):
+                    try:
+                        content = p.read_text(encoding="utf-8", errors="replace")
+                        for line in content.split("\n"):
+                            line = line.strip()
+                            if line.startswith("package ") and line.endswith(";"):
+                                pkg = line.replace("package ", "").replace(";", "").strip()
+                                return f"{pkg}.{class_name}"
+                    except Exception:
+                        pass
+        elif lang == "python":
+            for ext in [".py"]:
+                for p in ws.rglob(f"*{ext}"):
+                    if p.stem.lower() == class_name.lower():
+                        try:
+                            rel_path = p.relative_to(ws)
+                            module_path = ".".join(rel_path.with_suffix("").parts)
+                            return f"from {module_path} import {class_name}"
+                        except Exception:
+                            pass
+        return ""
+
+    def resolve_imports_for_functions(self, responsible_functions: list, lang: str = "java") -> list:
+        """Resolves fully-qualified imports for all classes referenced in responsible_functions."""
+        if not responsible_functions or not self.exists:
+            return []
+
+        imports = set()
+        for fn in responsible_functions:
+            # Extract class name (e.g. "AuthController.changePassword" -> "AuthController")
+            cls_name = fn.split(".")[0].strip() if "." in fn else fn.strip()
+            if not cls_name or cls_name in ("null", "UNKNOWN", "N/A"):
+                continue
+
+            resolved = self.find_class_import(cls_name, lang=lang)
+            if resolved:
+                if lang in ("java", "kotlin"):
+                    imports.add(f"import {resolved};")
+                elif lang == "python":
+                    imports.add(resolved)
+                else:
+                    imports.add(f"import {{ {cls_name} }} from './{cls_name}';")
+
+        return sorted(list(imports))
