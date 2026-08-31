@@ -11,6 +11,7 @@ from app.extensions.db import query
 approval_bp = Blueprint("approvals", __name__)
 
 _STAGE_MAP = {
+    "TEST_PLAN_REVIEW": "TEST_PLAN_REVIEW",
     "TEST_REVIEW": "TEST_REVIEW",
     "EVIDENCE_REVIEW": "EVIDENCE_REVIEW",
     "ALM_APPROVAL": "ALM_APPROVAL",
@@ -63,6 +64,13 @@ def decide(uuid):
         checkpoint = _STAGE_MAP.get(approval["stage"], approval["stage"])
         _, status = dispatch_resume(approval["workflow_id"], checkpoint)
         resumed = status
+    elif decision == "REJECTED":
+        from app.repositories.workflow_repo import update_run, get_run
+        run = get_run(approval["workflow_id"])
+        if run:
+            update_run(approval["workflow_id"], "CANCELLED", run.get("current_stage"), run.get("state_json") or {})
+        resumed = "CANCELLED"
+        
     return ok({"decision": decision, "resumed": resumed}, "Decision recorded")
 
 

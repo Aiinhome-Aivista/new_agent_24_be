@@ -289,9 +289,7 @@ INSTRUCTIONS:
         # 3. Parse test cases
         parsed_tcs = self._parse_test_cases(result, contracts, story, acs, lang, framework, clean_story_key, has_codebase)
 
-        # 4. Coverage Gate: Always supplement with systematic AC scenarios to ensure compound rules and boundaries are fully fleshed out
-        synthetic_tcs = self._derive_systematic_scenarios(story, acs, contracts, lang, framework, clean_story_key, has_codebase)
-        parsed_tcs.extend(synthetic_tcs)
+        # 4. (Removed Coverage Gate to prevent dummy test inflation)
 
         total_candidates = len(parsed_tcs)
 
