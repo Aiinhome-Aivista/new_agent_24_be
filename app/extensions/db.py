@@ -14,12 +14,14 @@ def init_pool():
             _pool = pooling.MySQLConnectionPool(
                 pool_name="tdd_pool",
                 pool_size=Config.MYSQL_POOL_SIZE,
+                pool_reset_session=True,
                 host=Config.MYSQL_HOST,
                 port=Config.MYSQL_PORT,
                 database=Config.MYSQL_DATABASE,
                 user=Config.MYSQL_USER,
                 password=Config.MYSQL_PASSWORD,
                 autocommit=False,
+                connection_timeout=10,
             )
             print(f"[Database] Connection successful: connected to {Config.MYSQL_DATABASE} on {Config.MYSQL_HOST}:{Config.MYSQL_PORT}")
         except Exception as e:
@@ -40,33 +42,62 @@ def check_connection():
 def get_connection():
     pool = init_pool()
     try:
-        return pool.get_connection()
+        conn = pool.get_connection()
+        if not conn.is_connected():
+            conn.ping(reconnect=True, attempts=3, delay=1)
+        return conn
     except Exception:
         import time
         time.sleep(0.05)
-        return pool.get_connection()
+        conn = pool.get_connection()
+        if not conn.is_connected():
+            conn.ping(reconnect=True, attempts=3, delay=1)
+        return conn
 
 
 def query(sql: str, params: tuple = (), *, fetchone: bool = False):
     conn = get_connection()
+    cur = None
     try:
         cur = conn.cursor(dictionary=True)
         cur.execute(sql, params)
         rows = cur.fetchone() if fetchone else cur.fetchall()
-        cur.close()
         return rows
     finally:
-        conn.close()
+        if cur is not None:
+            try:
+                cur.close()
+            except Exception:
+                pass
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def execute(sql: str, params: tuple = (), *, return_id: bool = False):
     conn = get_connection()
+    cur = None
     try:
         cur = conn.cursor(dictionary=True)
         cur.execute(sql, params)
         conn.commit()
         last_id = cur.lastrowid
-        cur.close()
         return last_id if return_id else None
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise e
     finally:
-        conn.close()
+        if cur is not None:
+            try:
+                cur.close()
+            except Exception:
+                pass
+        try:
+            conn.close()
+        except Exception:
+            pass
+
