@@ -6,10 +6,20 @@ from app.workflows.state_machine import TEST_PLANNING, BLOCKED
 _SYSTEM_PROMPT = """You are a software architect planning API test coverage.
 
 Given the API contracts (service, method, path) and the story context, produce a
-service-by-service test plan. Return a valid JSON object:
+service-by-service test plan. Also, if the story defines any API endpoints or payload fields, extract them explicitly. Return a valid JSON object:
 
 {
   "impacted_services": ["service_name_1", "service_name_2"],
+  "extracted_apis": [
+    {
+      "method": "POST",
+      "url": "/api/example/resource",
+      "purpose": "Brief description of what this API does based on the story",
+      "payload_schema": {
+        "field_name": "data_type (required/optional, constraints)"
+      }
+    }
+  ],
   "dependency_graph": {
     "nodes": ["service_name_1", "service_name_2"],
     "edges": [{"from": "service_name_1", "to": "service_name_2", "reason": "calls downstream"}]
@@ -22,6 +32,8 @@ service-by-service test plan. Return a valid JSON object:
     }
   ]
 }
+
+
 
 Rules:
 1. Only include services that appear in the provided contracts.
@@ -87,6 +99,8 @@ Analysis summary:
                 print(f"     - {ep.get('method', 'GET')} {ep.get('path', '/')} [Priority: {ep.get('test_priority', 'high')}]")
 
         state["service_plan"] = service_plan
+        if "extracted_apis" in service_plan:
+            state["extracted_apis"] = service_plan["extracted_apis"]
         state["current_stage"] = TEST_PLANNING
         self._record(workflow_id, "service_planning", model_name=result.model,
                      latency_ms=result.latency_ms,

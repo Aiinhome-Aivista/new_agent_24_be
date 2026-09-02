@@ -17,11 +17,17 @@ class ApiRunResult:
 
 class NewmanRunner:
     """Real runner via `newman` (Postman) — requires newman on PATH and a collection file."""
-    def run(self, collection_path, environment):
-        proc = subprocess.run(
-            ["newman", "run", collection_path, "-e", environment, "--reporters", "json"],
-            capture_output=True, text=True, timeout=300,
-        )
+    def run(self, collection_path, environment, test_cases=None):
+        try:
+            # shell=True is often required on Windows to resolve npm global binaries like 'newman.cmd'
+            proc = subprocess.run(
+                ["newman", "run", collection_path, "-e", environment, "--reporters", "json"],
+                capture_output=True, text=True, timeout=300, shell=True
+            )
+        except FileNotFoundError:
+            print("[NewmanRunner] Error: 'newman' command not found. Falling back to MockApiRunner.")
+            return MockApiRunner().run(collection_path, environment, test_cases)
+
         report = json.loads(proc.stdout or "{}")
         results = []
         for execution in report.get("run", {}).get("executions", []):
