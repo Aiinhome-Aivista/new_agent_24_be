@@ -343,3 +343,126 @@ class GitWorkspace:
                     imports.add(f"import {{ {cls_name} }} from './{cls_name}';")
 
         return sorted(list(imports))
+
+    def detect_base_url(self) -> str:
+        """Detect the server base URL (e.g. http://localhost:8080 or http://localhost:5000) from project config."""
+        if not self.exists:
+            return "http://localhost:8080"
+
+        ws = self.workspace_path
+        port = None
+        context_path = ""
+
+        # 1. Spring Boot application.properties or application.yml
+        for prop_path in [
+            ws / "src" / "main" / "resources" / "application.properties",
+            ws / "src" / "main" / "resources" / "application.yml",
+            ws / "src" / "main" / "resources" / "application.yaml",
+            ws / "application.properties",
+            ws / "application.yml",
+        ]:
+            if prop_path.exists():
+                try:
+                    content = prop_path.read_text(encoding="utf-8", errors="replace")
+                    for line in content.split("\n"):
+                        line = line.strip()
+                        if line.startswith("server.port") and "=" in line:
+                            val = line.split("=")[1].strip()
+                            if val.isdigit():
+                                port = val
+                        elif line.startswith("server.servlet.context-path") and "=" in line:
+                            context_path = line.split("=")[1].strip()
+                        elif "port:" in line:
+                            parts = line.split("port:")
+                            val = parts[1].strip()
+                            if val.isdigit():
+                                port = val
+                        elif "context-path:" in line:
+                            context_path = line.split("context-path:")[1].strip()
+                except Exception:
+                    pass
+
+        # 2. Check .env file
+        env_file = ws / ".env"
+        if not port and env_file.exists():
+            try:
+                content = env_file.read_text(encoding="utf-8", errors="replace")
+                for line in content.split("\n"):
+                    line = line.strip()
+                    if line.startswith("PORT=") or line.startswith("SERVER_PORT="):
+                        val = line.split("=")[1].strip()
+                        if val.isdigit():
+                            port = val
+            except Exception:
+                pass
+
+        structure = self.find_project_structure()
+        lang = structure.get("language")
+        if not port:
+            if lang in ("java", "kotlin"):
+                port = "8080"
+            elif lang == "python":
+                port = "8000"
+            elif lang in ("typescript", "javascript"):
+                port = "3000"
+            else:
+                port = "8080"
+
+        context_path = context_path.strip().rstrip("/")
+        if context_path and not context_path.startswith("/"):
+            context_path = f"/{context_path}"
+
+        return f"http://localhost:{port}{context_path}"
+
+    def extract_api_route_context(self, max_files: int = 25, max_bytes_per_file: int = 6000) -> str:
+        """Extract source code snippets focusing specifically on API Controllers, Routes, Handlers, DTOs, and Models."""
+        if not self.exists:
+            return ""
+
+        structure = self.find_project_structure()
+        lang = structure.get("language", "")
+        ext_map = {
+            "java": [".java"],
+            "kotlin": [".kt"],
+            "python": [".py"],
+            "typescript": [".ts", ".tsx"],
+            "javascript": [".js", ".jsx"],
+        }
+        extensions = ext_map.get(lang, [".java", ".py", ".ts", ".js"])
+        all_files = self.list_files(extensions=extensions)
+
+        skip_patterns = ["test/", "tests/", "__test__", "node_modules/", "build/", "target/",
+                         ".gradle/", "dist/", ".git/", "vendor/"]
+        valid_files = [f for f in all_files if not any(p in f.lower() for p in skip_patterns)]
+
+        # Priority keywords for API route definitions & models
+        api_keywords = [
+            "controller", "resource", "router", "route", "handler", "endpoint",
+            "dto", "request", "response", "schema", "model", "entity", "service"
+        ]
+
+        def api_file_priority(path: str):
+            lower = path.lower()
+            for i, kw in enumerate(api_keywords):
+                if kw in lower:
+                    return i
+            return len(api_keywords)
+
+        # Sort so controllers and DTOs come first
+        api_files = [f for f in valid_files if any(kw in f.lower() for kw in api_keywords)]
+        if not api_files:
+            api_files = valid_files
+
+        api_files.sort(key=api_file_priority)
+        api_files = api_files[:max_files]
+
+        parts = []
+        for f in api_files:
+            try:
+                content = self.read_file(f, max_size=max_bytes_per_file)
+                parts.append(f"=== File: {f} ===\n{content}")
+            except Exception:
+                continue
+
+        return "\n\n".join(parts)
+

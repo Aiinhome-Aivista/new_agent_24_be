@@ -86,36 +86,18 @@ def start_workflow():
                         "path": clean_p
                     })
 
-        if not contracts:
-            if "password" in all_text or "auth" in all_text:
-                service_name = "AuthService"
-                contracts = [
-                    {"service": service_name, "method": "POST", "path": "/api/auth/change-password"},
-                    {"service": service_name, "method": "POST", "path": "/api/auth/login"},
-                ]
-            elif "user" in story_text:
-                endpoint_slug = "users"
-                service_name = (project or {}).get("name", "UserService")
-                contracts = [
-                    {"service": service_name, "method": "GET", "path": f"/api/{endpoint_slug}"},
-                    {"service": service_name, "method": "POST", "path": f"/api/{endpoint_slug}"},
-                    {"service": service_name, "method": "GET", "path": f"/api/{endpoint_slug}/{{id}}"},
-                    {"service": service_name, "method": "PUT", "path": f"/api/{endpoint_slug}/{{id}}"},
-                    {"service": service_name, "method": "DELETE", "path": f"/api/{endpoint_slug}/{{id}}"},
-                ]
-            else:
-                clean_name = "".join(c for c in story.get("title", "resource") if c.isalnum() or c in " -_").strip()
-                endpoint_slug = clean_name.lower().replace(" ", "-") or "resources"
-                if not endpoint_slug.endswith("s"):
-                    endpoint_slug += "s"
-                service_name = (project or {}).get("name", "CoreService")
-                contracts = [
-                    {"service": service_name, "method": "GET", "path": f"/api/{endpoint_slug}"},
-                    {"service": service_name, "method": "POST", "path": f"/api/{endpoint_slug}"},
-                    {"service": service_name, "method": "GET", "path": f"/api/{endpoint_slug}/{{id}}"},
-                    {"service": service_name, "method": "PUT", "path": f"/api/{endpoint_slug}/{{id}}"},
-                    {"service": service_name, "method": "DELETE", "path": f"/api/{endpoint_slug}/{{id}}"},
-                ]
+        if not contracts and not (project or {}).get("git_repo_url"):
+            # Only generate fallback endpoint if no git repo is connected
+            clean_name = "".join(c for c in story.get("title", "resource") if c.isalnum() or c in " -_").strip()
+            endpoint_slug = clean_name.lower().replace(" ", "-") or "resources"
+            if not endpoint_slug.endswith("s"):
+                endpoint_slug += "s"
+            service_name = (project or {}).get("name", "CoreService")
+            # Determine main method from story title
+            main_method = "POST" if any(k in story_text for k in ("create", "add", "register", "insert", "new")) else "GET"
+            contracts = [
+                {"service": service_name, "method": main_method, "path": f"/api/{endpoint_slug}"}
+            ]
 
     workflow_id = str(_uuid.uuid4())
     state = {
