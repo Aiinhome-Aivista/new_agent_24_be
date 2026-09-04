@@ -18,24 +18,31 @@ def ingest_document(
     content_bytes: bytes,
     doc_type: str = "general",
     version: str = "v1",
-    uploaded_by: int = None
+    uploaded_by: int = None,
+    project_name: str = "project"
 ) -> dict:
     """
     Ingests a document into the project's knowledge base.
     1. Parses document.
-    2. Inserts record into knowledge_documents.
-    3. Chunks text and inserts rows into knowledge_chunks.
-    4. Indexes into ChromaDB project collection if enabled.
+    2. Saves file locally or to S3.
+    3. Inserts record into knowledge_documents.
+    4. Chunks text and inserts rows into knowledge_chunks.
+    5. Indexes into ChromaDB project collection if enabled.
     """
+    from app.services.storage_service import save_file
+    
     text, meta = parse_document(file_name, content_bytes, doc_type)
     doc_uuid = str(uuid.uuid4())
+    
+    # Save file to storage
+    storage_path = save_file(file_name, content_bytes, project_id, project_name)
 
     # 1. Insert into knowledge_documents
     doc_id = execute("""
         INSERT INTO knowledge_documents
         (uuid, project_id, title, doc_type, source, version, index_status, freshness_at, chunk_count, uploaded_by)
         VALUES (%s, %s, %s, %s, %s, %s, 'indexed', NOW(), 0, %s)
-    """, (doc_uuid, project_id, file_name, doc_type, file_name, version, uploaded_by), return_id=True)
+    """, (doc_uuid, project_id, file_name, doc_type, storage_path, version, uploaded_by), return_id=True)
 
     # 2. Chunk text
     base_meta = {
@@ -44,6 +51,7 @@ def ingest_document(
         "doc_uuid": doc_uuid,
         "doc_type": doc_type,
         "file_name": file_name,
+        "source": storage_path,
         "version": version
     }
     chunk_sz = int(getattr(Config, "CHUNK_SIZE", 1000) or 1000)

@@ -65,6 +65,15 @@ class Config:
     UPLOAD_PATH = os.getenv("UPLOAD_PATH", "data/uploads")
     EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
+    # Storage & AWS S3
+    DEPLOY = _bool("deploy", "false")
+    AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "")
+    AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+    AWS_DEFAULT_REGION = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
+    AWS_S3_BUCKET_NAME = os.getenv("AWS_S3_BUCKET_NAME", "")
+    AWS_S3_BASE_FOLDER = os.getenv("AWS_S3_BASE_FOLDER", "Agents_Doc")
+    AWS_S3_AGENT_FOLDER = os.getenv("AWS_S3_AGENT_FOLDER", "Agent_24")
+
     # RAG Chunking & Retrieval Parameters
     CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1000"))
     CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "200"))
