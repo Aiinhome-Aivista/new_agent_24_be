@@ -60,7 +60,7 @@ class Config:
     LLM_PROVIDER = os.getenv("LLM_PROVIDER", "")
 
     # RAG / Vector store & storage
-    VECTOR_STORE = os.getenv("VECTOR_STORE", "mock")  # mock | chromadb
+    VECTOR_STORE = os.getenv("VECTOR_STORE", "chromadb")  # mock | chromadb
     CHROMA_PATH = os.getenv("CHROMA_PATH", "data/chroma_db")
     UPLOAD_PATH = os.getenv("UPLOAD_PATH", "data/uploads")
     EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
@@ -82,9 +82,9 @@ class Config:
     CONTEXT_MAX_CHARACTERS = int(os.getenv("CONTEXT_MAX_CHARACTERS", "20000"))
 
     # Tools
-    API_RUNNER = os.getenv("API_RUNNER", "mock")       # mock | newman | bruno
-    CODE_ANALYZER = os.getenv("CODE_ANALYZER", "mock")  # mock | sonarqube | checkstyle
-    ALM_PROVIDER = os.getenv("ALM_PROVIDER", "mock")    # mock | azure_devops | jira | rally
+    API_RUNNER = os.getenv("API_RUNNER", "newman")       # mock | newman | bruno
+    CODE_ANALYZER = os.getenv("CODE_ANALYZER", "sonarqube")  # mock | sonarqube | checkstyle
+    ALM_PROVIDER = os.getenv("ALM_PROVIDER", "jira")    # mock | azure_devops | jira | rally
 
     # Observability
     OTEL_EXPORTER = os.getenv("OTEL_EXPORTER", "console")
