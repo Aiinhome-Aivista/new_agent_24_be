@@ -38,7 +38,7 @@ class Config:
     MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "tdd_intelligence")
     MYSQL_USER = os.getenv("MYSQL_USER", "root")
     MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
-    MYSQL_POOL_SIZE = int(os.getenv("MYSQL_POOL_SIZE", "5"))
+    MYSQL_POOL_SIZE = int(os.getenv("MYSQL_POOL_SIZE", "25"))
 
     # Redis / Celery
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")

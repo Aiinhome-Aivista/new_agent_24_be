@@ -3,7 +3,7 @@ import json
 import re
 from app.agents.base import BaseAgent
 from app.llm.model_router.router import get_router
-from app.repositories.test_repo import insert_test_case
+from app.repositories.test_repo import insert_test_case, save_test_cases_batch
 from app.workflows.state_machine import TEST_REVIEW
 from app.agents.test_generator.test_validator import (
     TestCaseDeduplicator,
@@ -327,16 +327,12 @@ INSTRUCTIONS:
         print(f"   * Partially Confirmed: {generation_summary['grounding_partially_confirmed']}")
         print(f"   * Needs Review (Assumptions): {generation_summary['needs_review']}")
 
-        # 8. Database persistence
-        if story_id:
-            from app.extensions.db import execute
-            execute("DELETE FROM test_cases WHERE workflow_id=%s", (workflow_id,))
-
+        # 8. Database persistence (Single Transaction Batch)
         for tc in validated_tcs:
-            tc_uuid = str(uuid.uuid4())
-            tc["uuid"] = tc_uuid
-            if story_id:
-                insert_test_case(tc_uuid, workflow_id, story_id, tc)
+            if "uuid" not in tc:
+                tc["uuid"] = str(uuid.uuid4())
+        if story_id:
+            save_test_cases_batch(workflow_id, story_id, validated_tcs)
 
         print(f"\n[TestGenerator] Successfully Generated {len(validated_tcs)} Structured Test Cases:")
         for tc in validated_tcs:

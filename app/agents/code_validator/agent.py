@@ -2,7 +2,7 @@ import uuid
 from app.agents.base import BaseAgent
 from app.tools.code_analysis.analyzer import get_analyzer
 from app.llm.model_router.router import get_router
-from app.repositories.test_repo import create_code_quality_run, add_code_quality_issue
+from app.repositories.test_repo import save_code_quality_run_with_issues
 from app.workflows.state_machine import TRACEABILITY
 
 
@@ -15,14 +15,12 @@ class CodeValidatorAgent(BaseAgent):
         code_units = [t.get("generated_code") for t in state.get("generated_tests", [])]
         analysis = analyzer.analyze(code_units)
 
-        cq_id = create_code_quality_run(
+        cq_id = save_code_quality_run_with_issues(
             str(uuid.uuid4()), workflow_id,
             "mock" if analysis.is_mock else "sonarqube",
-            analysis.score, analysis.passed, analysis.is_mock)
-
-        for issue in analysis.issues:
-            add_code_quality_issue(cq_id, issue["severity"], issue["rule"], issue["file"],
-                                   issue["line"], issue["description"], issue["remediation"])
+            analysis.score, analysis.passed, analysis.is_mock,
+            issues=analysis.issues
+        )
 
         explanation = ""
         if analysis.issues:

@@ -191,10 +191,18 @@ def workflow_status(workflow_id):
     if not run:
         return fail("NOT_FOUND", "Workflow not found", 404)
     
-    # Auto-healing: If workflow is in QUEUED/CREATED, automatically launch background execution
+    # Auto-healing: If workflow is in QUEUED/CREATED, atomically launch background execution once
     if run.get("status") == "QUEUED" and run.get("current_stage") == "CREATED":
-        state = run.get("state_json") or {}
-        dispatch_start(workflow_id, state)
+        from app.extensions.db import execute
+        updated = execute(
+            "UPDATE workflow_runs SET status='RUNNING', current_stage='REQUIREMENT_ANALYSIS' WHERE workflow_id=%s AND status='QUEUED' AND current_stage='CREATED'",
+            (workflow_id,), return_rowcount=True
+        )
+        if updated:
+            state = run.get("state_json") or {}
+            state["status"] = "RUNNING"
+            state["current_stage"] = "REQUIREMENT_ANALYSIS"
+            dispatch_start(workflow_id, state)
         run["status"] = "RUNNING"
         run["current_stage"] = "REQUIREMENT_ANALYSIS"
 
