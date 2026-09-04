@@ -208,8 +208,14 @@ class LiveApiRunner:
             raw_url = str(req.get("endpoint") or tc.get("url") or tc.get("endpoint") or "").strip()
             env_str = str(environment or "").strip()
 
+            import urllib.parse
             if raw_url.startswith("http://") or raw_url.startswith("https://"):
-                url = raw_url
+                if env_str and (env_str.startswith("http://") or env_str.startswith("https://")):
+                    parsed_raw = urllib.parse.urlparse(raw_url)
+                    parsed_env = urllib.parse.urlparse(env_str)
+                    url = urllib.parse.urlunparse((parsed_env.scheme, parsed_env.netloc, parsed_raw.path, parsed_raw.params, parsed_raw.query, parsed_raw.fragment))
+                else:
+                    url = raw_url
             elif raw_url.startswith("/"):
                 base = env_str if (env_str.startswith("http://") or env_str.startswith("https://")) else "http://localhost:8080"
                 url = f"{base.rstrip('/')}{raw_url}"
