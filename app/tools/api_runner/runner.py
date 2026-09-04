@@ -102,13 +102,13 @@ class LiveApiRunner:
             req = tc.get("request_spec") or {}
             res_spec = tc.get("expected_response_spec") or {}
             exp_status = res_spec.get("status_code", 200)
-            method = req.get("method", "GET").upper()
+            method = (req.get("method") or tc.get("method") or "GET").upper()
             
             # Use real payload if provided (from manual scenarios)
-            payload = tc.get("actual_payload") or req.get("payload")
+            payload = tc.get("actual_payload") or tc.get("payload") or req.get("payload")
             
             # The URL could be fully qualified or relative. If relative, prepend environment (base URL)
-            url = req.get("endpoint", "")
+            url = req.get("endpoint") or tc.get("url") or tc.get("endpoint") or ""
             if url.startswith("/"):
                 # assume environment is the base URL
                 url = f"{environment.rstrip('/')}{url}"
