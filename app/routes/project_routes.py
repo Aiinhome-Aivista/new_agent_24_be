@@ -332,7 +332,8 @@ def upload_knowledge(project_uuid):
         content_bytes=content_bytes,
         doc_type=doc_type,
         version=version,
-        uploaded_by=g.user_id
+        uploaded_by=g.user_id,
+        project_name=project.get("name", "project")
     )
 
     audit("knowledge_upload", user_id=g.user_id, project_id=project["id"],
@@ -460,7 +461,8 @@ def upload_collection(project_uuid):
             file_name=filename,
             content_bytes=raw_bytes,
             doc_type=doc_type,
-            uploaded_by=g.user_id
+            uploaded_by=g.user_id,
+            project_name=project.get("name", "project")
         )
 
         service = query("SELECT * FROM services WHERE project_id=%s AND name=%s", (project["id"], service_name), fetchone=True)

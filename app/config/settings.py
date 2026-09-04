@@ -60,10 +60,19 @@ class Config:
     LLM_PROVIDER = os.getenv("LLM_PROVIDER", "")
 
     # RAG / Vector store & storage
-    VECTOR_STORE = os.getenv("VECTOR_STORE", "mock")  # mock | chromadb
+    VECTOR_STORE = os.getenv("VECTOR_STORE", "chromadb")  # mock | chromadb
     CHROMA_PATH = os.getenv("CHROMA_PATH", "data/chroma_db")
     UPLOAD_PATH = os.getenv("UPLOAD_PATH", "data/uploads")
     EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+
+    # Storage & AWS S3
+    DEPLOY = _bool("deploy", "false")
+    AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "")
+    AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+    AWS_DEFAULT_REGION = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
+    AWS_S3_BUCKET_NAME = os.getenv("AWS_S3_BUCKET_NAME", "")
+    AWS_S3_BASE_FOLDER = os.getenv("AWS_S3_BASE_FOLDER", "Agents_Doc")
+    AWS_S3_AGENT_FOLDER = os.getenv("AWS_S3_AGENT_FOLDER", "Agent_24")
 
     # RAG Chunking & Retrieval Parameters
     CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1000"))
@@ -82,9 +91,9 @@ class Config:
     CONTEXT_MAX_CHARACTERS = int(os.getenv("CONTEXT_MAX_CHARACTERS", "20000"))
 
     # Tools
-    API_RUNNER = os.getenv("API_RUNNER", "mock")       # mock | newman | bruno
-    CODE_ANALYZER = os.getenv("CODE_ANALYZER", "mock")  # mock | sonarqube | checkstyle
-    ALM_PROVIDER = os.getenv("ALM_PROVIDER", "mock")    # mock | azure_devops | jira | rally
+    API_RUNNER = os.getenv("API_RUNNER", "newman")       # mock | newman | bruno
+    CODE_ANALYZER = os.getenv("CODE_ANALYZER", "sonarqube")  # mock | sonarqube | checkstyle
+    ALM_PROVIDER = os.getenv("ALM_PROVIDER", "jira")    # mock | azure_devops | jira | rally
 
     # Observability
     OTEL_EXPORTER = os.getenv("OTEL_EXPORTER", "console")
