@@ -20,7 +20,8 @@ def require_auth(fn):
             return fail("INVALID_TOKEN", "Invalid access token", 401)
         if payload.get("type") != "access":
             return fail("INVALID_TOKEN", "Not an access token", 401)
-        g.user_id = payload["sub"]
+        raw_sub = payload.get("sub")
+        g.user_id = int(raw_sub) if str(raw_sub).isdigit() else raw_sub
         g.roles = payload.get("roles", [])
         g.perms = payload.get("perms", [])
         return fn(*args, **kwargs)

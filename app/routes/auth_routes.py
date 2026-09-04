@@ -41,7 +41,8 @@ def refresh():
         return fail("INVALID_TOKEN", "Invalid refresh token", 401)
     if payload.get("type") != "refresh":
         return fail("INVALID_TOKEN", "Not a refresh token", 401)
-    uid = payload["sub"]
+    raw_uid = payload.get("sub")
+    uid = int(raw_uid) if str(raw_uid).isdigit() else raw_uid
     roles, perms = roles_for(uid), permissions_for(uid)
     return ok({"access_token": issue_access(uid, roles, perms)})
 

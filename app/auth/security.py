@@ -23,12 +23,12 @@ def _encode(payload: dict, minutes: int = None, days: int = None) -> str:
 
 
 def issue_access(user_id: int, roles: list, permissions: list) -> str:
-    return _encode({"sub": user_id, "type": "access", "roles": roles, "perms": permissions},
+    return _encode({"sub": str(user_id), "type": "access", "roles": roles, "perms": permissions},
                    minutes=Config.JWT_ACCESS_MINUTES)
 
 
 def issue_refresh(user_id: int) -> str:
-    return _encode({"sub": user_id, "type": "refresh"}, days=Config.JWT_REFRESH_DAYS)
+    return _encode({"sub": str(user_id), "type": "refresh"}, days=Config.JWT_REFRESH_DAYS)
 
 
 def decode(token: str) -> dict:

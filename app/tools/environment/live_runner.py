@@ -37,13 +37,11 @@ class LiveEnvironmentManager:
         
         command = []
         if project_type == "nodejs":
-            if not os.path.exists(os.path.join(self.workspace_path, "node_modules")):
-                print("[LiveEnvironment] Running npm install...")
-                subprocess.run(["npm", "install"], cwd=self.workspace_path, shell=True)
             command = ["npm", "start"]
         elif project_type == "python":
-            subprocess.run(["pip", "install", "-r", "requirements.txt"], cwd=self.workspace_path, shell=True)
-            if os.path.exists(os.path.join(self.workspace_path, "main.py")):
+            if os.path.exists(os.path.join(self.workspace_path, "run.py")):
+                command = ["python", "run.py"]
+            elif os.path.exists(os.path.join(self.workspace_path, "main.py")):
                 command = ["python", "main.py"]
                 # Try to guess uvicorn if FastAPI
                 with open(os.path.join(self.workspace_path, "main.py"), "r", encoding="utf-8") as f:
