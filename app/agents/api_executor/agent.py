@@ -12,7 +12,8 @@ class ApiExecutorAgent(BaseAgent):
 
     def run(self, workflow_id, state):
         from app.repositories.test_repo import list_test_cases
-        runner = get_runner()
+        force_live = state.get("force_live_execution", False)
+        runner = get_runner(force_live=force_live)
         collection = state.get("collection_path")
         environment = state.get("environment", "default")
         test_cases = list_test_cases(workflow_id) or state.get("generated_tests", [])

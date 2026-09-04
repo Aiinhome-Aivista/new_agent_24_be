@@ -86,3 +86,54 @@ def code_log(workflow_id):
         return ok({"code_log": None})
 
 
+@test_bp.route("/workflows/<workflow_id>/run-live-test", methods=["POST"])
+@require_auth
+@require_permission("workflow.read")
+def run_live_test(workflow_id):
+    try:
+        from app.repositories.workflow_repo import get_run
+        from app.tools.api_runner.runner import LiveApiRunner
+        from app.tools.environment.live_runner import LiveEnvironmentManager
+        import json as _json
+
+        body = request.get_json(silent=True) or {}
+        scenario = body.get("scenario")
+        environment = body.get("environment", "http://localhost:8080")
+        
+        # We need the workspace path. We can get it from the run state or project.
+        # For this prototype, if it's localhost, we try to start the server.
+        run = get_run(workflow_id)
+        if run:
+            state = run.get("state_json") or {}
+            if isinstance(state, str):
+                try:
+                    state = _json.loads(state)
+                except Exception:
+                    state = {}
+            workspace_path = state.get("workspace_path")
+            
+            if workspace_path and "localhost" in environment:
+                import urllib.parse
+                parsed_url = urllib.parse.urlparse(environment)
+                port = parsed_url.port if parsed_url.port else 8080
+                
+                manager = LiveEnvironmentManager(workspace_path, port=port)
+                manager.start_server()
+                # Wait a bit more just in case
+                import time
+                time.sleep(3)
+
+        if not scenario:
+            return fail("VALIDATION_ERROR", "Scenario data is required")
+
+        run_result = LiveApiRunner().run(
+            collection_path=None, 
+            environment=environment, 
+            test_cases=[scenario]
+        )
+        
+        result_data = run_result.results[0] if run_result.results else {}
+        return ok({"result": result_data}, "Live test executed")
+    except Exception as e:
+        print(f"[test_routes] Handled run_live_test error: {e}")
+        return fail("EXECUTION_ERROR", str(e), 500)

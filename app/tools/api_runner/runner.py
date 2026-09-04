@@ -6,6 +6,8 @@ involved in producing execution values.
 import subprocess
 import json
 import random
+import requests
+import time
 from app.config import Config
 
 
@@ -91,7 +93,75 @@ class MockApiRunner:
         return ApiRunResult(results, is_mock=True)
 
 
-def get_runner():
+class LiveApiRunner:
+    """Real runner via `requests` that hits the dynamically spun-up or provided target URL."""
+    def run(self, collection_path, environment, test_cases=None):
+        results = []
+        tests_to_run = test_cases if test_cases else []
+        for idx, tc in enumerate(tests_to_run):
+            req = tc.get("request_spec") or {}
+            res_spec = tc.get("expected_response_spec") or {}
+            exp_status = res_spec.get("status_code", 200)
+            method = req.get("method", "GET").upper()
+            
+            # Use real payload if provided (from manual scenarios)
+            payload = tc.get("actual_payload") or req.get("payload")
+            
+            # The URL could be fully qualified or relative. If relative, prepend environment (base URL)
+            url = req.get("endpoint", "")
+            if url.startswith("/"):
+                # assume environment is the base URL
+                url = f"{environment.rstrip('/')}{url}"
+            elif not url.startswith("http"):
+                url = f"{environment.rstrip('/')}/{url.lstrip('/')}"
+                
+            tc_id = tc.get("id")
+            tc_key = tc.get("test_key", f"TC-{idx+1:03d}")
+            
+            assertions_list = res_spec.get("assertions", ["Response status code is expected"])
+            
+            start_time = time.time()
+            try:
+                response = requests.request(
+                    method=method,
+                    url=url,
+                    json=payload if payload else None,
+                    timeout=30
+                )
+                duration_ms = int((time.time() - start_time) * 1000)
+                status_code = response.status_code
+                response_text = response.text
+                passed = (status_code == exp_status)
+                
+            except Exception as e:
+                duration_ms = int((time.time() - start_time) * 1000)
+                status_code = 500
+                response_text = str(e)
+                passed = False
+
+            built_assertions = []
+            for a in (assertions_list[:3] if assertions_list else ["Status code is as expected"]):
+                a_name = a if isinstance(a, str) else str(a)
+                # Naive assertion pass/fail based on status code for now
+                built_assertions.append({"name": a_name, "passed": passed})
+
+            results.append({
+                "test_case_id": tc_id,
+                "test_key": tc_key,
+                "status_code": status_code,
+                "passed": passed,
+                "duration_ms": duration_ms,
+                "assertions": built_assertions,
+                "request": {"method": method, "url": url},
+                "response_body": response_text,
+            })
+            
+        return ApiRunResult(results, is_mock=False)
+
+
+def get_runner(force_live=False):
+    if force_live or Config.API_RUNNER == "live":
+        return LiveApiRunner()
     if Config.API_RUNNER == "newman":
         return NewmanRunner()
     return MockApiRunner()
