@@ -424,9 +424,11 @@ def list_standalone_executions(project_id=None, story_id=None, limit=50):
     return runs
 
 
-def get_execution_run(run_uuid):
+def get_execution_run(identifier):
     _ensure_schema()
-    is_num = str(run_uuid).isdigit()
+    if not identifier:
+        return None
+    is_num = str(identifier).isdigit()
     run = query("""
         SELECT r.*,
                p.name AS project_name,
@@ -435,9 +437,10 @@ def get_execution_run(run_uuid):
         FROM execution_runs r
         LEFT JOIN projects p ON p.id = r.project_id
         LEFT JOIN stories s ON s.id = r.story_id
-        WHERE r.uuid = %s OR r.id = %s
+        WHERE r.uuid = %s OR r.workflow_id = %s OR r.id = %s
+        ORDER BY r.created_at DESC
         LIMIT 1
-    """, (run_uuid, int(run_uuid) if is_num else -1), fetchone=True)
+    """, (identifier, identifier, int(identifier) if is_num else -1), fetchone=True)
     if not run:
         return None
 
@@ -532,35 +535,6 @@ def list_code_quality(workflow_id, limit=20):
         issues = query("SELECT * FROM code_quality_issues WHERE code_quality_run_id=%s ORDER BY id ASC", (r["id"],))
         r["issues"] = issues or []
     return runs
-
-
-def get_execution_run(workflow_id):
-    """Retrieve ONLY the latest execution run with child results for a workflow."""
-    if _is_db_stubbed():
-        runs = list_executions(workflow_id)
-        return runs[0] if runs else None
-    latest_run = query("SELECT * FROM execution_runs WHERE workflow_id=%s ORDER BY created_at DESC LIMIT 1",
-                       (workflow_id,), fetchone=True)
-    if not latest_run:
-        return None
-    results = query("""
-        SELECT r.*,
-               req.method, req.url, req.headers AS req_headers, req.body AS req_body,
-               resp.status_code AS resp_status, resp.headers AS resp_headers, resp.body AS resp_body
-        FROM execution_results r
-        LEFT JOIN api_requests req ON req.execution_result_id = r.id
-        LEFT JOIN api_responses resp ON resp.execution_result_id = r.id
-        WHERE r.execution_run_id = %s
-        ORDER BY r.id ASC
-    """, (latest_run["id"],))
-    for res in results:
-        if isinstance(res.get("assertions"), str):
-            try:
-                res["assertions"] = json.loads(res["assertions"])
-            except Exception:
-                res["assertions"] = []
-    latest_run["results"] = results or []
-    return latest_run
 
 
 def get_code_quality_run(workflow_id):
