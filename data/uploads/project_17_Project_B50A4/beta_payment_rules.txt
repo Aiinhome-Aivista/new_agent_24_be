@@ -1,0 +1,1 @@
+Beta Payment Rule: Single transactions exceeding 50,000 USD require dual director approval.

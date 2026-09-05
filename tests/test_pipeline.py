@@ -55,8 +55,7 @@ def test_pipeline_runs_execution_and_validation(stub_db):
     state = orch.advance("wf-2", _initial_state())
     state = orch.resume("wf-2", state, sm.TEST_REVIEW)
     assert state["current_stage"] == sm.EVIDENCE_REVIEW
-    # Deterministic tools produced execution + quality values (not the LLM).
-    assert state["execution"]["total"] == len(state["generated_tests"])
+    # Deterministic tools produced quality values in validation stage (not the LLM).
     assert state["code_quality"]["score"] > 0
 
 

@@ -1,5 +1,8 @@
 import os
-import boto3
+try:
+    import boto3
+except ImportError:
+    boto3 = None
 from app.config.settings import Config
 
 def save_file(file_name: str, content_bytes: bytes, project_id: int, project_name: str = "project") -> str:

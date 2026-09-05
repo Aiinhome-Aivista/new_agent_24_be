@@ -43,6 +43,35 @@ def _ensure_schema():
                     execute(f"ALTER TABLE test_cases ADD COLUMN {col_name} {col_type}")
                 except Exception as ex:
                     print(f"[test_repo] Alter column {col_name} note: {ex}")
+
+        # Allow execution_runs to support standalone runs
+        try:
+            execute("ALTER TABLE execution_runs MODIFY COLUMN workflow_id CHAR(36) NULL")
+        except Exception:
+            pass
+
+        exec_run_cols = [
+            ("project_id", "BIGINT NULL"),
+            ("story_id", "BIGINT NULL"),
+            ("base_url", "VARCHAR(255) NULL"),
+            ("collection_name", "VARCHAR(255) NULL"),
+        ]
+        for col_name, col_type in exec_run_cols:
+            exists = query(f"SHOW COLUMNS FROM execution_runs LIKE '{col_name}'")
+            if not exists:
+                try:
+                    execute(f"ALTER TABLE execution_runs ADD COLUMN {col_name} {col_type}")
+                except Exception:
+                    pass
+
+        # Allow execution_results to store test_key directly
+        res_exists = query("SHOW COLUMNS FROM execution_results LIKE 'test_key'")
+        if not res_exists:
+            try:
+                execute("ALTER TABLE execution_results ADD COLUMN test_key VARCHAR(150) NULL")
+            except Exception:
+                pass
+
         _SCHEMA_CHECKED = True
     except Exception as e:
         print(f"[test_repo] Schema check warning: {e}")
@@ -170,8 +199,7 @@ def save_test_cases_batch(workflow_id, story_id, test_cases):
                     params[:19])
 
 
-def list_test_cases(workflow_id):
-    rows = query("SELECT * FROM test_cases WHERE workflow_id=%s ORDER BY test_key", (workflow_id,))
+def _hydrate_test_cases(rows):
     if not rows:
         return []
     for r in rows:
@@ -193,6 +221,28 @@ def list_test_cases(workflow_id):
     return rows
 
 
+def list_test_cases(workflow_id):
+    rows = query("SELECT * FROM test_cases WHERE workflow_id=%s ORDER BY test_key", (workflow_id,))
+    return _hydrate_test_cases(rows)
+
+
+def list_test_cases_by_story_id(story_id):
+    _ensure_schema()
+    rows = query("SELECT * FROM test_cases WHERE story_id=%s ORDER BY test_key", (story_id,))
+    return _hydrate_test_cases(rows)
+
+
+def list_test_cases_by_story_uuid(story_uuid):
+    _ensure_schema()
+    rows = query("""
+        SELECT tc.* FROM test_cases tc
+        INNER JOIN stories s ON s.id = tc.story_id
+        WHERE s.uuid = %s
+        ORDER BY tc.test_key
+    """, (story_uuid,))
+    return _hydrate_test_cases(rows)
+
+
 def set_test_status(uuid, status):
     execute("UPDATE test_cases SET status=%s WHERE uuid=%s", (status, uuid))
 
@@ -206,20 +256,36 @@ def update_test_case_code_by_key(workflow_id, test_key, generated_code, status="
             (generated_code, status, workflow_id, test_key))
 
 
-def create_execution_run(uuid, workflow_id, runner, environment, collection, status, total, passed, failed, is_mock):
-    return execute("""INSERT INTO execution_runs
-        (uuid, workflow_id, runner, environment, collection, status, total, passed, failed, is_mock, started_at, completed_at)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())""",
-        (uuid, workflow_id, runner, environment, collection, status, total, passed, failed, is_mock),
-        return_id=True)
+def create_execution_run(uuid, workflow_id, runner, environment, collection, status, total, passed, failed, is_mock,
+                         project_id=None, story_id=None, base_url=None, collection_name=None):
+    _ensure_schema()
+    try:
+        return execute("""INSERT INTO execution_runs
+            (uuid, workflow_id, project_id, story_id, base_url, collection_name, runner, environment, collection, status, total, passed, failed, is_mock, started_at, completed_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())""",
+            (uuid, workflow_id, project_id, story_id, base_url, collection_name, runner, environment, collection, status, total, passed, failed, is_mock),
+            return_id=True)
+    except Exception:
+        return execute("""INSERT INTO execution_runs
+            (uuid, workflow_id, runner, environment, collection, status, total, passed, failed, is_mock, started_at, completed_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())""",
+            (uuid, workflow_id, runner, environment, collection, status, total, passed, failed, is_mock),
+            return_id=True)
 
 
-def add_execution_result(uuid, run_id, test_case_id, status_code, passed, duration_ms, assertions, is_mock):
-    return execute("""INSERT INTO execution_results
-        (uuid, execution_run_id, test_case_id, status_code, passed, duration_ms, assertions, executed_at, is_mock)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,NOW(),%s)""",
-        (uuid, run_id, test_case_id, status_code, passed, duration_ms, json.dumps(assertions or [], default=str), is_mock),
-        return_id=True)
+def add_execution_result(uuid, run_id, test_case_id, status_code, passed, duration_ms, assertions, is_mock, test_key=None):
+    try:
+        return execute("""INSERT INTO execution_results
+            (uuid, execution_run_id, test_case_id, test_key, status_code, passed, duration_ms, assertions, executed_at, is_mock)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NOW(),%s)""",
+            (uuid, run_id, test_case_id, test_key, status_code, passed, duration_ms, json.dumps(assertions or [], default=str), is_mock),
+            return_id=True)
+    except Exception:
+        return execute("""INSERT INTO execution_results
+            (uuid, execution_run_id, test_case_id, status_code, passed, duration_ms, assertions, executed_at, is_mock)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,NOW(),%s)""",
+            (uuid, run_id, test_case_id, status_code, passed, duration_ms, json.dumps(assertions or [], default=str), is_mock),
+            return_id=True)
 
 
 def save_raw_request(result_id, method, url, headers, body):
@@ -235,15 +301,18 @@ def save_raw_response(result_id, status_code, headers, body, raw_ref):
 
 
 def save_execution_run_with_results(run_uuid, workflow_id, runner, environment, collection, status,
-                                    total, passed, failed, is_mock, results):
+                                    total, passed, failed, is_mock, results,
+                                    project_id=None, story_id=None, base_url=None, collection_name=None):
     """Saves execution run, child results, and raw requests/responses in a single transaction."""
+    _ensure_schema()
     if _is_db_stubbed():
         run_id = create_execution_run(run_uuid, workflow_id, runner, environment, collection, status,
-                                      total, passed, failed, is_mock)
+                                      total, passed, failed, is_mock, project_id, story_id, base_url, collection_name)
         for r in results:
             tc_id = r.get("test_case_id")
             res_id = add_execution_result(str(_uuid.uuid4()), run_id, tc_id, r.get("status_code"),
-                                          1 if r.get("passed") else 0, r.get("duration_ms", 0), r.get("assertions"), is_mock)
+                                          1 if r.get("passed") else 0, r.get("duration_ms", 0), r.get("assertions"), is_mock,
+                                          test_key=r.get("test_key"))
             req = r.get("request") or {}
             save_raw_request(res_id, req.get("method", "GET"), req.get("url", ""), req.get("headers"), req.get("body"))
             save_raw_response(res_id, r.get("status_code"), r.get("headers"), r.get("response_body"), None)
@@ -251,20 +320,33 @@ def save_execution_run_with_results(run_uuid, workflow_id, runner, environment, 
 
     with get_db_connection() as conn:
         cur = conn.cursor(dictionary=True)
-        cur.execute("""INSERT INTO execution_runs
-            (uuid, workflow_id, runner, environment, collection, status, total, passed, failed, is_mock, started_at, completed_at)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())""",
-            (run_uuid, workflow_id, runner, environment, collection, status, total, passed, failed, is_mock))
+        try:
+            cur.execute("""INSERT INTO execution_runs
+                (uuid, workflow_id, project_id, story_id, base_url, collection_name, runner, environment, collection, status, total, passed, failed, is_mock, started_at, completed_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())""",
+                (run_uuid, workflow_id, project_id, story_id, base_url, collection_name, runner, environment, collection, status, total, passed, failed, is_mock))
+        except Exception:
+            cur.execute("""INSERT INTO execution_runs
+                (uuid, workflow_id, runner, environment, collection, status, total, passed, failed, is_mock, started_at, completed_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())""",
+                (run_uuid, workflow_id, runner, environment, collection, status, total, passed, failed, is_mock))
         run_id = cur.lastrowid
 
         for r in results:
             tc_id = r.get("test_case_id")
             res_uuid = str(_uuid.uuid4())
-            cur.execute("""INSERT INTO execution_results
-                (uuid, execution_run_id, test_case_id, status_code, passed, duration_ms, assertions, executed_at, is_mock)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,NOW(),%s)""",
-                (res_uuid, run_id, tc_id, r.get("status_code"), 1 if r.get("passed") else 0,
-                 r.get("duration_ms", 0), json.dumps(r.get("assertions") or [], default=str), 1 if is_mock else 0))
+            try:
+                cur.execute("""INSERT INTO execution_results
+                    (uuid, execution_run_id, test_case_id, test_key, status_code, passed, duration_ms, assertions, executed_at, is_mock)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NOW(),%s)""",
+                    (res_uuid, run_id, tc_id, r.get("test_key"), r.get("status_code"), 1 if r.get("passed") else 0,
+                     r.get("duration_ms", 0), json.dumps(r.get("assertions") or [], default=str), 1 if is_mock else 0))
+            except Exception:
+                cur.execute("""INSERT INTO execution_results
+                    (uuid, execution_run_id, test_case_id, status_code, passed, duration_ms, assertions, executed_at, is_mock)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,NOW(),%s)""",
+                    (res_uuid, run_id, tc_id, r.get("status_code"), 1 if r.get("passed") else 0,
+                     r.get("duration_ms", 0), json.dumps(r.get("assertions") or [], default=str), 1 if is_mock else 0))
             result_id = cur.lastrowid
 
             req = r.get("request") or {}
@@ -304,6 +386,101 @@ def list_executions(workflow_id, limit=20):
                     res["assertions"] = []
         r["results"] = results or []
     return runs
+
+
+def list_standalone_executions(project_id=None, story_id=None, limit=50):
+    _ensure_schema()
+    params = []
+    where_clauses = []
+    if project_id:
+        where_clauses.append("r.project_id = %s")
+        params.append(project_id)
+    if story_id:
+        where_clauses.append("r.story_id = %s")
+        params.append(story_id)
+
+    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+    params.append(limit)
+
+    sql = f"""
+        SELECT r.*,
+               p.name AS project_name,
+               s.title AS story_title,
+               s.external_key AS story_key
+        FROM execution_runs r
+        LEFT JOIN projects p ON p.id = r.project_id
+        LEFT JOIN stories s ON s.id = r.story_id
+        {where_sql}
+        ORDER BY r.created_at DESC
+        LIMIT %s
+    """
+    runs = query(sql, tuple(params))
+    if not runs:
+        return []
+    for r in runs:
+        r["total"] = r.get("total") or 0
+        r["passed"] = r.get("passed") or 0
+        r["failed"] = r.get("failed") or 0
+    return runs
+
+
+def get_execution_run(run_uuid):
+    _ensure_schema()
+    is_num = str(run_uuid).isdigit()
+    run = query("""
+        SELECT r.*,
+               p.name AS project_name,
+               s.title AS story_title,
+               s.external_key AS story_key
+        FROM execution_runs r
+        LEFT JOIN projects p ON p.id = r.project_id
+        LEFT JOIN stories s ON s.id = r.story_id
+        WHERE r.uuid = %s OR r.id = %s
+        LIMIT 1
+    """, (run_uuid, int(run_uuid) if is_num else -1), fetchone=True)
+    if not run:
+        return None
+
+    results = query("""
+        SELECT res.*,
+               tc.title AS test_case_title,
+               tc.test_key AS tc_test_key,
+               req.method AS req_method,
+               req.url AS req_url,
+               req.headers AS req_headers,
+               req.body AS req_body,
+               resp.status_code AS resp_status,
+               resp.headers AS resp_headers,
+               resp.body AS resp_body
+        FROM execution_results res
+        LEFT JOIN test_cases tc ON tc.id = res.test_case_id
+        LEFT JOIN api_requests req ON req.execution_result_id = res.id
+        LEFT JOIN api_responses resp ON resp.execution_result_id = res.id
+        WHERE res.execution_run_id = %s
+        ORDER BY res.id ASC
+    """, (run["id"],))
+
+    for res in (results or []):
+        if isinstance(res.get("assertions"), str):
+            try:
+                res["assertions"] = json.loads(res["assertions"])
+            except Exception:
+                res["assertions"] = []
+        if isinstance(res.get("req_headers"), str):
+            try:
+                res["req_headers"] = json.loads(res["req_headers"])
+            except Exception:
+                pass
+        if isinstance(res.get("resp_headers"), str):
+            try:
+                res["resp_headers"] = json.loads(res["resp_headers"])
+            except Exception:
+                pass
+        if not res.get("test_key"):
+            res["test_key"] = res.get("tc_test_key") or f"TC-{res.get('id')}"
+
+    run["results"] = results or []
+    return run
 
 
 def create_code_quality_run(uuid, workflow_id, analyzer, score, passed, is_mock):

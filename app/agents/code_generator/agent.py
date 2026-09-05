@@ -10,7 +10,7 @@ from pathlib import Path
 from app.agents.base import BaseAgent
 from app.llm.model_router.router import get_router
 from app.repositories.test_repo import list_test_cases, update_test_case_code_by_key
-from app.workflows.state_machine import API_EXECUTION
+from app.workflows.state_machine import CODE_VALIDATION
 
 _SYSTEM_PROMPT = """You are an expert Java Spring Boot Architect specializing in Test-Driven Development (TDD).
 
@@ -143,7 +143,7 @@ class CodeGeneratorAgent(BaseAgent):
 
         elapsed_ms = int((time.time() - start_time) * 1000)
         print(f"[CodeGenerator] Finished code generation in {elapsed_ms}ms. Total lines: {total_lines}.\n")
-        log_entries.append(f"[{now_str}] [COMPLETE] Code generation complete in {elapsed_ms}ms. Total lines: {total_lines}. Advancing to API_EXECUTION.")
+        log_entries.append(f"[{now_str}] [COMPLETE] Code generation complete in {elapsed_ms}ms. Total lines: {total_lines}. Advancing to CODE_VALIDATION.")
 
         code_log = {
             "workflow_id": workflow_id,
@@ -161,7 +161,7 @@ class CodeGeneratorAgent(BaseAgent):
 
         state["generated_tests"] = updated_tests
         state["code_generation"] = code_log
-        state["current_stage"] = API_EXECUTION
+        state["current_stage"] = CODE_VALIDATION
         
         self._record(workflow_id, "code_generation", model_name=f"{lang}/{framework}",
                      latency_ms=total_latency, output_summary={"total_lines": total_lines, "tests": len(updated_tests)})

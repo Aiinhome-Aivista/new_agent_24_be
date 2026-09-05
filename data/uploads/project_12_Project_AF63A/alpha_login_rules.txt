@@ -1,0 +1,1 @@
+Alpha Login Rule: Users must authenticate with a 2FA hardware token and company email.
