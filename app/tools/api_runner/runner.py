@@ -17,12 +17,53 @@ class ApiRunResult:
 
 class NewmanRunner:
     """Real runner via `newman` (Postman) — requires newman on PATH and a collection file."""
-    def run(self, collection_path, environment):
-        proc = subprocess.run(
-            ["newman", "run", collection_path, "-e", environment, "--reporters", "json"],
-            capture_output=True, text=True, timeout=300,
-        )
-        report = json.loads(proc.stdout or "{}")
+    def run(self, collection_path, environment, test_cases=None):
+        import tempfile, os, json, subprocess
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_path = os.path.join(temp_dir, "report.json")
+            # Fallback for newman absolute path just in case PATH is cached
+            import shutil
+            newman_bin = "newman"
+            which_newman = shutil.which("newman")
+            npm_newman = r"C:\Users\Himanshu\AppData\Roaming\npm\newman.cmd"
+            
+            if which_newman:
+                newman_bin = f'"{which_newman}"'
+            elif os.path.exists(npm_newman):
+                newman_bin = f'"{npm_newman}"'
+
+            env_arg = ""
+            if environment and environment != "default" and os.path.exists(environment):
+                env_arg = f'-e "{environment}"'
+
+            cmd = f'{newman_bin} run "{collection_path}" {env_arg} --reporters json --reporter-json-export "{report_path}"'
+            proc = subprocess.run(
+                cmd, shell=True,
+                capture_output=True, text=True, timeout=300,
+            )
+            
+            if proc.returncode != 0 and not os.path.exists(report_path):
+                # Newman execution failed entirely
+                err_msg = proc.stderr if proc.stderr else proc.stdout
+                print("Newman failed:", err_msg)
+                return ApiRunResult([{
+                    "test_case_id": None,
+                    "test_key": "EXEC-ERR",
+                    "status_code": 0,
+                    "passed": False,
+                    "duration_ms": 0,
+                    "assertions": [{"name": "Newman Execution", "passed": False}],
+                    "request": {"method": "GET", "url": "N/A"},
+                    "response_body": f"Newman failed: {err_msg[:300]}"
+                }], is_mock=False)
+
+            if os.path.exists(report_path):
+                with open(report_path, "r", encoding="utf-8") as f:
+                    report = json.load(f)
+            else:
+                report = {}
+
         results = []
         for execution in report.get("run", {}).get("executions", []):
             resp = execution.get("response", {}) or {}
@@ -34,7 +75,7 @@ class NewmanRunner:
                                for a in execution.get("assertions", [])],
                 "request": {"method": execution.get("request", {}).get("method"),
                             "url": str(execution.get("request", {}).get("url"))},
-                "response_body": resp.get("stream"),
+                "response_body": resp.get("stream", b"").decode("utf-8", errors="ignore") if isinstance(resp.get("stream"), bytes) else str(resp.get("stream") or ""),
             })
         return ApiRunResult(results, is_mock=False)
 

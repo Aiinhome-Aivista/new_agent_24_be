@@ -9,11 +9,17 @@ from app.errors.handlers import fail
 def require_auth(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
+        token = None
         header = request.headers.get("Authorization", "")
-        if not header.startswith("Bearer "):
+        if header.startswith("Bearer "):
+            token = header.split(" ", 1)[1]
+        elif request.args.get("token"):
+            token = request.args.get("token")
+            
+        if not token:
             return fail("UNAUTHORIZED", "Missing bearer token", 401)
         try:
-            payload = decode(header.split(" ", 1)[1])
+            payload = decode(token)
         except pyjwt.ExpiredSignatureError:
             return fail("TOKEN_EXPIRED", "Access token expired", 401)
         except pyjwt.InvalidTokenError:

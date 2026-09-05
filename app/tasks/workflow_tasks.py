@@ -8,15 +8,20 @@ from app.agents.orchestrator.orchestrator import Orchestrator
 from app.repositories.workflow_repo import get_run, update_run
 from app.config import Config
 from app.workflows.state_machine import FAILED
+import logging
+
+logger = logging.getLogger(__name__)
 
 orchestrator = Orchestrator()
 
 
 @celery_app.task(bind=True, max_retries=Config.WORKFLOW_MAX_RETRIES)
 def run_workflow_task(self, workflow_id, initial_state):
+    logger.info(f"Starting workflow task for workflow_id: {workflow_id}")
     try:
         return orchestrator.advance(workflow_id, initial_state)
     except Exception as exc:  # noqa: BLE001
+        logger.exception(f"Exception occurred in workflow {workflow_id}: {exc}")
         if self.request.retries >= self.max_retries:
             run = get_run(workflow_id)
             state = run["state_json"] if run else initial_state
@@ -28,13 +33,16 @@ def run_workflow_task(self, workflow_id, initial_state):
 
 @celery_app.task(bind=True, max_retries=Config.WORKFLOW_MAX_RETRIES)
 def resume_workflow_task(self, workflow_id, checkpoint):
+    logger.info(f"Resuming workflow task for workflow_id: {workflow_id} at checkpoint: {checkpoint}")
     run = get_run(workflow_id)
     if not run:
+        logger.error(f"Workflow {workflow_id} not found when attempting to resume")
         return {"error": "workflow not found"}
     state = run["state_json"]
     try:
         return orchestrator.resume(workflow_id, state, checkpoint)
     except Exception as exc:  # noqa: BLE001
+        logger.exception(f"Exception occurred while resuming workflow {workflow_id}: {exc}")
         if self.request.retries >= self.max_retries:
             update_run(workflow_id, FAILED, checkpoint, state,
                        error_code="RESUME_FAILED", error_message=str(exc)[:900])

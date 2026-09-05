@@ -98,26 +98,26 @@ def evidence(workflow_id):
 def download_evidence(workflow_id):
     import os
     from flask import send_file, Response
-    fmt = request.args.get("format", "html").lower()
     evs = list_evidence(workflow_id)
     if not evs:
         return fail("NOT_FOUND", "No evidence artifacts found for this workflow", 404)
 
     latest = evs[-1]
-    base_file = latest.get("file_path") or ""
     key = latest.get("evidence_key") or f"EVID-{workflow_id[:8]}"
+    fmt = (request.args.get("format") or request.args.get("fmt", "markdown")).lower()
+    base_file = latest.get("file_path") or ""
 
     if fmt == "html":
         html_file = base_file.replace(".md", ".html")
         if os.path.isfile(html_file):
-            return send_file(html_file, mimetype="text/html", as_attachment=True, download_name=f"{key}.html")
+            return send_file(os.path.abspath(html_file), mimetype="text/html", as_attachment=True, download_name=f"{key}.html")
         # Generate on the fly if needed
         run = get_run(workflow_id)
         from app.repositories.test_repo import list_test_cases, get_execution_run, get_code_quality_run
         from app.tools.document_generator.generator import render_evidence_html
         content = render_evidence_html(
             key,
-            (run.get("state_json") or {}).get("story") or {},
+            (run.get("state_json") or {}).get("story") if run and run.get("state_json") else {},
             list_test_cases(workflow_id),
             get_execution_run(workflow_id),
             get_code_quality_run(workflow_id),
@@ -134,7 +134,7 @@ def download_evidence(workflow_id):
             "evidence_key": key,
             "workflow_id": workflow_id,
             "checksum_sha256": latest.get("checksum_sha256"),
-            "story": (run.get("state_json") or {}).get("story") or {},
+            "story": (run.get("state_json") or {}).get("story") if run and run.get("state_json") else {},
             "test_cases": list_test_cases(workflow_id),
             "execution": get_execution_run(workflow_id),
             "code_quality": get_code_quality_run(workflow_id),
@@ -146,7 +146,7 @@ def download_evidence(workflow_id):
     else:
         # Default markdown
         if os.path.isfile(base_file):
-            return send_file(base_file, mimetype="text/markdown", as_attachment=True, download_name=f"{key}.md")
+            return send_file(os.path.abspath(base_file), mimetype="text/markdown", as_attachment=True, download_name=f"{key}.md")
         return Response(latest.get("narrative") or "Evidence file not found", mimetype="text/markdown",
                         headers={"Content-Disposition": f"attachment; filename={key}.md"})
 

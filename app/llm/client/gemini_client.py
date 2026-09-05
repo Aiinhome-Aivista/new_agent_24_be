@@ -8,7 +8,10 @@ Centralized LLM client supporting both Cloud Gemini and Local LLM (Ollama).
 import json
 import time
 import requests
+import logging
 from app.config import Config
+
+logger = logging.getLogger(__name__)
 
 
 class LLMResult:
@@ -89,7 +92,7 @@ class LocalLLMClient:
                 is_mock=False
             )
         except Exception as e:
-            print(f"[LocalLLMClient] Call to {self.api_url} failed ({e}) — falling back to deterministic mock adapter.")
+            logger.exception(f"[LocalLLMClient] Call to {self.api_url} failed ({e}) — falling back to deterministic mock adapter.")
             return self._mock.generate(model=actual_model, system=system, prompt=prompt,
                                        temperature=temperature, max_tokens=max_tokens, as_json=as_json)
 
@@ -111,7 +114,7 @@ class GeminiClient:
     def __init__(self, api_key: str = None):
         key = (api_key or getattr(Config, "GEMINI_API_KEY", "") or "").strip()
         if not HAS_GENAI or not genai:
-            print("[GeminiClient] Google GenAI SDK (google-genai) not available — using Mock adapter.")
+            logger.warning("[GeminiClient] Google GenAI SDK (google-genai) not available — using Mock adapter.")
             self._client = None
             self._mock = MockGeminiClient()
             return
@@ -120,7 +123,7 @@ class GeminiClient:
             self._client = genai.Client(api_key=key)
             self._mock = MockGeminiClient()
         except Exception as e:
-            print(f"[GeminiClient] Failed to initialize Google GenAI SDK ({e}) — using Mock adapter.")
+            logger.exception(f"[GeminiClient] Failed to initialize Google GenAI SDK ({e}) — using Mock adapter.")
             self._client = None
             self._mock = MockGeminiClient()
 
@@ -170,7 +173,7 @@ class GeminiClient:
             }
             return LLMResult(text, actual_model, int((time.time() - start) * 1000), token_usage, False)
         except Exception as e:
-            print(f"[GeminiClient] Live call failed with model '{actual_model}' ({e}) — falling back to deterministic mock adapter.")
+            logger.exception(f"[GeminiClient] Live call failed with model '{actual_model}' ({e}) — falling back to deterministic mock adapter.")
             return self._mock.generate(model=actual_model, system=system, prompt=prompt,
                                        temperature=temperature, max_tokens=max_tokens, as_json=as_json)
 
@@ -191,15 +194,15 @@ def build_client():
 
     # 1. Use Cloud Gemini if enabled and key is present in .env
     if use_gemini and gemini_key:
-        print(f"[LLM] Active Mode: CLOUD GEMINI (Model: {Config.GEMINI_MODEL})")
+        logger.info(f"[LLM] Active Mode: CLOUD GEMINI (Model: {Config.GEMINI_MODEL})")
         return GeminiClient(gemini_key)
 
     # 2. Use Local LLM if URL configured in .env
     local_url = getattr(Config, "LLM_API_URL", "").strip()
     if local_url:
-        print(f"[LLM] Active Mode: LOCAL OLLAMA (Endpoint: {local_url}, Model: {Config.LLM_MODEL})")
+        logger.info(f"[LLM] Active Mode: LOCAL OLLAMA (Endpoint: {local_url}, Model: {Config.LLM_MODEL})")
         return LocalLLMClient(local_url, Config.LLM_MODEL, Config.LLM_TIMEOUT)
 
     # 3. Fallback to mock
-    print("[LLM] Active Mode: MOCK ADAPTER (No valid Gemini key or Local URL found in .env)")
+    logger.warning("[LLM] Active Mode: MOCK ADAPTER (No valid Gemini key or Local URL found in .env)")
     return MockGeminiClient()
