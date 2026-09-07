@@ -82,34 +82,66 @@ class TestCaseDeduplicator:
 
 
 class AcceptanceCriteriaCoverageValidator:
-    """Validates that EVERY Acceptance Criterion in the story has at least one mapped test case."""
+    """Validates that EVERY Acceptance Criterion in the story is tracked, grounded, and verified against codebase and tests."""
+
+    @staticmethod
+    def _clean_req_summary(text: str) -> str:
+        clean = re.sub(r"^(?:AC|Acceptance\s*Criteri(?:a|on))[\s\-_\#]*\d*[\s:\.-]+", "", text, flags=re.IGNORECASE).strip()
+        m = re.match(r"^(?:(?:GET|POST|PUT|DELETE|PATCH)\s+API\s*(?:\((.*?)\))?[:\s\-]+)(.*)", clean, re.IGNORECASE)
+        if m:
+            title = m.group(1) or ""
+            rest = m.group(2).strip()
+            if title:
+                return f"{title}: {rest}" if rest else title
+        return clean
 
     @staticmethod
     def _normalize_ac_key(ac_item: Any, idx: int) -> Tuple[str, str]:
-        """Extracts standard AC key (e.g. AC-01) and text requirement."""
+        """Extracts standard AC key (e.g. AC-01) and clean text requirement."""
         if isinstance(ac_item, dict):
             key = ac_item.get("ac_key") or f"AC-{idx:02d}"
-            text = ac_item.get("text") or str(ac_item)
+            text = ac_item.get("text") or ac_item.get("requirement") or str(ac_item)
         else:
             text = str(ac_item)
-            match = re.match(r"^(AC[-\s]?\d+)\s*[:\.-]?\s*(.*)", text, re.IGNORECASE)
+            match = re.match(r"^(?:AC|Acceptance\s*Criteri(?:a|on))[\s\-_\#]*(\d+)\s*[:\.-]?\s*(.*)", text, re.IGNORECASE)
             if match:
-                key = match.group(1).upper().replace(" ", "-")
-                if not re.match(r"^AC-\d{2,}$", key):
-                    # Normalize AC-1 to AC-01
-                    num_part = re.sub(r"[^0-9]", "", key)
-                    key = f"AC-{int(num_part):02d}"
-                text = match.group(2)
+                num_part = match.group(1)
+                key = f"AC-{int(num_part):02d}" if num_part else f"AC-{idx:02d}"
+                text = match.group(2).strip()
             else:
                 key = f"AC-{idx:02d}"
-        return key, text
+        
+        # Ensure key format is always AC-01, AC-02, etc.
+        num_match = re.search(r"\d+", key)
+        if num_match:
+            key = f"AC-{int(num_match.group(0)):02d}"
+        else:
+            key = f"AC-{idx:02d}"
+
+        clean_text = re.sub(r"^(?:AC|Acceptance\s*Criteri(?:a|on))[\s\-_\#]*\d*[\s:\.-]+", "", text, flags=re.IGNORECASE).strip()
+        return key, clean_text
 
     @classmethod
-    def validate_coverage(cls, test_cases: List[Dict[str, Any]], acceptance_criteria: List[Any]) -> Dict[str, Any]:
-        """Generates an AC Coverage Matrix and verifies 100% AC coverage."""
+    def validate_coverage(cls, test_cases: List[Dict[str, Any]], acceptance_criteria: List[Any],
+                          implemented_in_code: List[Dict[str, Any]] = None,
+                          missing_from_code: List[Dict[str, Any]] = None,
+                          has_codebase: bool = False) -> Dict[str, Any]:
+        """Generates an AC Coverage Matrix and verifies AC coverage against generated test cases and codebase state."""
         matrix = []
         covered_count = 0
         missing_acs = []
+
+        implemented_endpoints = set()
+        for item in (implemented_in_code or []):
+            m = (item.get("method") or "GET").upper()
+            p = (item.get("path") or "").lower().rstrip("/")
+            implemented_endpoints.add(f"{m} {p}")
+
+        missing_endpoints = set()
+        for item in (missing_from_code or []):
+            m = (item.get("method") or "GET").upper()
+            p = (item.get("path") or "").lower().rstrip("/")
+            missing_endpoints.add(f"{m} {p}")
 
         # Build lookup of covered AC keys from test cases
         ac_to_tests: Dict[str, List[str]] = {}
@@ -120,10 +152,12 @@ class AcceptanceCriteriaCoverageValidator:
 
             # Check explicit AC IDs
             for ac_id in ac_ids:
-                norm_id = ac_id.upper().strip()
-                if re.match(r"^AC-\d$", norm_id):
-                    norm_id = f"AC-{int(norm_id[3:]):02d}"
-                ac_to_tests.setdefault(norm_id, []).append(t_key)
+                norm_id = str(ac_id).upper().strip()
+                num_m = re.search(r"\d+", norm_id)
+                if num_m:
+                    norm_id = f"AC-{int(num_m.group(0)):02d}"
+                    if t_key not in ac_to_tests.setdefault(norm_id, []):
+                        ac_to_tests[norm_id].append(t_key)
 
             # Check story reference string (e.g. "AC-01: ...")
             ref_matches = re.findall(r"AC[-_\s]?(\d+)", story_ref, re.IGNORECASE)
@@ -132,19 +166,64 @@ class AcceptanceCriteriaCoverageValidator:
                 if t_key not in ac_to_tests.setdefault(norm_id, []):
                     ac_to_tests[norm_id].append(t_key)
 
+        seen_keys = set()
         for idx, raw_ac in enumerate(acceptance_criteria, start=1):
             ac_key, ac_text = cls._normalize_ac_key(raw_ac, idx)
-            mapped_tcs = ac_to_tests.get(ac_key, [])
-            is_covered = len(mapped_tcs) > 0
+            if ac_key in seen_keys:
+                continue
+            seen_keys.add(ac_key)
+
+            mapped_tcs = list(ac_to_tests.get(ac_key, []))
+
+            # Fallback mapping if LLM did not explicitly tag AC ID
+            if not mapped_tcs:
+                ac_lower = ac_text.lower()
+                for tc in test_cases:
+                    t_key = tc.get("test_key", "TC-UNKNOWN")
+                    req = tc.get("request_spec") or {}
+                    method = (req.get("method") or tc.get("method") or "").lower()
+                    endpoint = (req.get("endpoint") or tc.get("url") or tc.get("path") or "").lower()
+                    title = (tc.get("title") or "").lower()
+
+                    if (method and method in ac_lower) or (endpoint and endpoint in ac_lower) or any(w in ac_lower for w in title.split() if len(w) > 4):
+                        if t_key not in mapped_tcs:
+                            mapped_tcs.append(t_key)
+
+            # Check if AC is truly covered in the codebase
+            has_tests = len(mapped_tcs) > 0
+            is_covered = has_tests
+
+            # If codebase was inspected and this AC's endpoint is missing in code, mark not covered
+            if has_codebase and missing_endpoints:
+                ac_lower = ac_text.lower()
+                mapped_endpoints = []
+                for tc in test_cases:
+                    if tc.get("test_key") in mapped_tcs:
+                        req = tc.get("request_spec") or {}
+                        m = (req.get("method") or tc.get("method") or "GET").upper()
+                        p = (req.get("endpoint") or tc.get("url") or tc.get("path") or "").lower().rstrip("/")
+                        mapped_endpoints.append(f"{m} {p}")
+
+                for m_ep in missing_endpoints:
+                    m_parts = m_ep.split()
+                    if len(m_parts) >= 2:
+                        m_verb, m_path = m_parts[0].lower(), m_parts[1].lower()
+                        if any(m_ep.lower() == ep.lower() or m_path == ep.split()[-1].lower() for ep in mapped_endpoints):
+                            is_covered = False
+                            break
+                        if m_verb in ac_lower and (m_path in ac_lower or m_path.strip("/") in ac_lower):
+                            is_covered = False
+                            break
 
             if is_covered:
                 covered_count += 1
             else:
                 missing_acs.append(ac_key)
 
-            # Short concise requirement summary
-            req_summary = ac_text.split(",")[0] if "," in ac_text else ac_text[:80]
-            req_summary = req_summary.replace("Given ", "").replace("When ", "")
+            # Concise clean requirement title
+            req_summary = cls._clean_req_summary(ac_text)
+            if len(req_summary) > 110:
+                req_summary = req_summary[:110] + "..."
 
             matrix.append({
                 "ac_key": ac_key,
@@ -154,7 +233,7 @@ class AcceptanceCriteriaCoverageValidator:
                 "test_case_keys": mapped_tcs
             })
 
-        total_acs = len(acceptance_criteria)
+        total_acs = len(matrix)
         coverage_pct = round((covered_count / total_acs * 100), 1) if total_acs > 0 else 100.0
 
         return {

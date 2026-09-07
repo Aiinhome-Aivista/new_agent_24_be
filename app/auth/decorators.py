@@ -10,10 +10,20 @@ def require_auth(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
         header = request.headers.get("Authorization", "")
-        if not header.startswith("Bearer "):
+        raw_token = ""
+        if header.startswith("Bearer "):
+            raw_token = header.split(" ", 1)[1].strip()
+        elif request.args.get("token"):
+            raw_token = request.args.get("token", "").strip()
+        elif request.args.get("access_token"):
+            raw_token = request.args.get("access_token", "").strip()
+        elif request.cookies.get("token"):
+            raw_token = request.cookies.get("token", "").strip()
+
+        if not raw_token:
             return fail("UNAUTHORIZED", "Missing bearer token", 401)
         try:
-            payload = decode(header.split(" ", 1)[1])
+            payload = decode(raw_token)
         except pyjwt.ExpiredSignatureError:
             return fail("TOKEN_EXPIRED", "Access token expired", 401)
         except pyjwt.InvalidTokenError:

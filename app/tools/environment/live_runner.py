@@ -62,7 +62,7 @@ class LiveEnvironmentManager:
             return False
 
         print(f"[LiveEnvironment] Starting server with command: {' '.join(command)}")
-        # Start as background process
+        # Start as background daemon process
         try:
             self.process = subprocess.Popen(
                 command, 
@@ -71,12 +71,16 @@ class LiveEnvironmentManager:
                 stderr=subprocess.DEVNULL,
                 shell=True
             )
-            # Give it time to boot up
-            time.sleep(5)
-            print("[LiveEnvironment] Server is assumed to be running.")
+            # Fast probe (up to 1.5s max)
+            for _ in range(15):
+                if is_port_in_use(self.port):
+                    print(f"[LiveEnvironment] Server is actively listening on port {self.port}.")
+                    return True
+                time.sleep(0.1)
+            print("[LiveEnvironment] Background server process launched.")
             return True
         except Exception as e:
-            print(f"[LiveEnvironment] Failed to start server: {e}")
+            print(f"[LiveEnvironment] Note: Could not auto-start local server ({e}).")
             return False
 
     def stop_server(self):

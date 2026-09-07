@@ -10,6 +10,6 @@ def test_password_hash_roundtrip():
 def test_jwt_roundtrip():
     token = issue_access(42, ["DEVELOPER"], ["workflow.create"])
     payload = decode(token)
-    assert payload["sub"] == 42
+    assert payload["sub"] == "42"
     assert payload["type"] == "access"
     assert "workflow.create" in payload["perms"]

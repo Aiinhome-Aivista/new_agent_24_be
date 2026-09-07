@@ -20,48 +20,25 @@ Your goal is to generate reliable, traceable, non-duplicated, and source-grounde
 CORE SOURCE PRIORITY:
 1. Explicit Acceptance Criteria
 2. Explicit User Story
-3. Approved API Contract / OpenAPI spec
+3. Approved API Contract / OpenAPI spec / Service Plan
 4. Project Knowledge Base
-5. Project Codebase
+5. Project Codebase (Controllers, Routers, DTOs, Schemas)
 6. Uploaded Postman / API collection
-7. Global Testing Knowledge Base (methodology, JUnit 5, Mockito, assertions)
-8. AI-derived testing scenarios
+7. AI-derived testing scenarios
 
 MANDATORY RULES:
 1. PROCESS EVERY ACCEPTANCE CRITERION INDEPENDENTLY:
-   - You MUST generate distinct, justified test cases covering every single Acceptance Criterion (AC-01 through AC-07+).
+   - You MUST generate distinct, justified test cases covering every single Acceptance Criterion (AC-01, AC-02, etc.).
    - Never mark the story covered by grouping all ACs into one generic test case.
 
-2. EXPAND COMPOUND ACCEPTANCE CRITERIA:
-   - For multi-condition requirements (like password strength with min 8 chars, 1 number, 1 special char), generate separate justified scenarios:
-     * Below 8 characters
-     * Exactly 8 characters and otherwise compliant
-     * Missing a number
-     * Missing a special character
-     * Multiple rules violated
-     * Valid compliant password
+2. REALISTIC ENDPOINTS & SCHEMAS FROM CODEBASE:
+   - Use the EXACT endpoint path, method, and field names defined in the API contracts / Codebase context.
+   - Do NOT invent fictional endpoints. Ground all request payloads and responses directly in the controller signatures and schema models.
 
-3. DEDICATED SECURITY TEST CASES:
-   - AC-05 (Previous JWT invalidation after password change): Dedicated security scenario. Set `status_source = "AI_ASSUMPTION"`, `requires_review = true`, `assumption_details = "JWT invalidation HTTP status is inferred from security policy"`.
-   - AC-06 (Authentication): Dedicated scenarios for missing JWT and invalid JWT (HTTP 401).
-   - AC-07 (Response security): Dedicated security scenario asserting response body never exposes plaintext password or password hash.
+3. CONCRETE TEST DATA:
+   - Provide realistic, authentic test data in `test_data` and `request_spec.body` matching the field types (e.g. valid strings, numbers, lists).
 
-4. EXPLICIT AC RESPONSE EXTRACTION:
-   - If an AC specifies an exact error message (e.g. AC-02 specifies 'Incorrect current password'), set `"response_body": {"message": "Incorrect current password"}` and `"response_body_source": "ACCEPTANCE_CRITERIA"`.
-   - If an AC does NOT specify a response body JSON schema (e.g. AC-04), set `"response_body": null` and `"response_body_source": "UNKNOWN"`. NEVER fabricate dummy messages like '{"message": "Password updated successfully"}'!
-
-5. NO RESPONSIBLE FUNCTION HALLUCINATIONS:
-   - Unless actual class/method names are found in the uploaded Codebase or Project Knowledge Base, set `"responsible_functions": null` and `"responsible_functions_source": "UNKNOWN"`. Never invent class names like AuthController.changePassword() out of thin air.
-
-6. TEST DATA GROUNDING:
-   - Set `"test_data_source": "AI_DERIVED"` for synthetic input test values.
-
-7. OVERALL GROUNDING CLASSIFICATION:
-   - Set `"overall_grounding": "CONFIRMED"` ONLY when status code, endpoint, and response body (or confirmed absence of body) are grounded in sources without assumptions.
-   - Set `"overall_grounding": "PARTIALLY_CONFIRMED"` when status and endpoint are grounded, but response body schema is undefined/unknown in source.
-   - Set `"overall_grounding": "NEEDS_REVIEW"` when material behavior depends on an assumption (`status_source == "AI_ASSUMPTION"` or `requires_review == true`).
-
-8. STRUCTURED QA FIELDS:
+4. STRUCTURED QA FIELDS:
    - `test_type`: "API" for REST endpoint tests, "UNIT" for class/method tests.
    - `test_steps`: Step 1 (Arrange), Step 2 (Act), Step 3 (Assert).
 
@@ -244,6 +221,18 @@ class TestGeneratorAgent(BaseAgent):
         acs_text = "\n".join(acs_formatted_lines) if acs_formatted_lines else story.get("description", "")
 
         # Build prompt enforcing source priority and systematic AC expansion
+        extracted_apis = state.get("extracted_apis") or []
+        api_endpoints_text = ""
+        if extracted_apis:
+            api_lines = []
+            for ep in extracted_apis:
+                api_lines.append(f"  - {ep.get('method', 'GET')} {ep.get('path', '/')} (Purpose: {ep.get('purpose', '')})")
+                if ep.get("payload_schema"):
+                    api_lines.append(f"    Request Body Schema: {json.dumps(ep.get('payload_schema'))}")
+                if ep.get("response_schema"):
+                    api_lines.append(f"    Response Schema: {json.dumps(ep.get('response_schema'))}")
+            api_endpoints_text = "\nExtracted Service Plan Endpoints:\n" + "\n".join(api_lines)
+
         prompt = f"""User Story: {story.get('title', '')}
 Story Key: {story_key}
 
@@ -256,17 +245,15 @@ Acceptance Criteria ({len(acs)} criteria):
 Target Tech: {lang} / {framework}
 Available Uploaded API Contracts:
 {contract_summary}
+{api_endpoints_text}
 
 INSTRUCTIONS:
 1. You MUST generate separate, justified test cases for EVERY Acceptance Criterion listed above.
-2. For AC-02, extract the exact error message 'Incorrect current password' as response_body = {{"message": "Incorrect current password"}}.
-3. For AC-03 (password strength), generate distinct test cases for: (a) <8 chars, (b) exactly 8 chars compliant, (c) missing number, (d) missing special char, (e) multiple rule failures.
-4. For AC-05 (previous JWT invalidation), generate a dedicated security test case with status_source = 'AI_ASSUMPTION' and requires_review = true.
-5. For AC-06, generate separate test cases for missing JWT and invalid JWT (HTTP 401).
-6. For AC-07, generate a dedicated security test case verifying response body does not expose password or hash.
-7. For AC-04, set expected_result = 'Password change succeeds, the stored password hash is updated, and HTTP 200 OK is returned.'
-8. If no codebase is provided, set responsible_functions = null and responsible_functions_source = 'UNKNOWN'.
-9. Set test_data_source = 'AI_DERIVED'.
+2. Ground all request bodies, endpoints, and headers in the provided API Contracts / Extracted Endpoints.
+3. For positive tests, use authentic test data matching the request schema and expect the matching response schema.
+4. For negative and validation tests, supply invalid or missing fields and assert the appropriate error response.
+5. If no codebase is provided, set responsible_functions = null and responsible_functions_source = 'UNKNOWN'.
+6. Set test_data_source = 'AI_DERIVED'.
 """
         if workspace_context:
             prompt += f"\nCodebase Structure & Source Files:\n{workspace_context}\n"
@@ -304,8 +291,15 @@ INSTRUCTIONS:
                 print(f"[TestGenerator] Validation Note on {tc.get('test_key')}: {', '.join(errs)}")
             validated_tcs.append(tc)
 
-        # 7. Final Coverage Report & Quality Summary
-        coverage_report = AcceptanceCriteriaCoverageValidator.validate_coverage(validated_tcs, acs)
+        # 7. Final Coverage Report & Quality Summary grounded in codebase review
+        implemented_in_code = state.get("implemented_in_code", [])
+        missing_from_code = state.get("missing_from_code", [])
+        coverage_report = AcceptanceCriteriaCoverageValidator.validate_coverage(
+            validated_tcs, acs,
+            implemented_in_code=implemented_in_code,
+            missing_from_code=missing_from_code,
+            has_codebase=has_codebase
+        )
         generation_summary = GenerationSummaryCalculator.calculate(
             total_candidates=total_candidates,
             final_test_cases=validated_tcs,
@@ -372,16 +366,13 @@ INSTRUCTIONS:
         base_entity = "".join(c for c in service_name if c.isalnum()) or "Auth"
         story_full_text = f"{story.get('title', '')} {story.get('description', '')}".lower()
         is_password_story = any(kw in story_full_text for kw in ("password", "change-password", "change password"))
-
-        primary_endpoint = "/api/auth/change-password" if is_password_story else (contracts[0].get("path") if contracts else f"/api/{base_entity.lower()}s")
-        primary_method = "POST" if is_password_story else (contracts[0].get("method") if contracts else "GET")
+        primary_endpoint = contracts[0].get("path") if contracts else "/api/resource"
+        primary_method = contracts[0].get("method") if contracts else "POST"
 
         normalized = []
         for idx, tc in enumerate(raw_tcs, start=1):
             method = (tc.get("request_spec") or {}).get("method") or primary_method
             endpoint = (tc.get("request_spec") or {}).get("endpoint") or primary_endpoint
-            if endpoint == "/api/resource" or endpoint.startswith("/api/resource"):
-                endpoint = primary_endpoint
 
             story_ref = tc.get("story_reference", "")
             ac_ids = tc.get("acceptance_criteria_ids") or []
@@ -392,55 +383,76 @@ INSTRUCTIONS:
             if not ac_ids:
                 ac_ids = [f"AC-{min(idx, len(acs) if acs else 1):02d}"]
 
+            # If endpoint is generic / placeholder or missing, resolve against the specific AC's inferred endpoint
+            if endpoint in ("/api/resource", "/api/endpoint", "/api", "", None) or "resource" in str(endpoint).lower():
+                target_ac = next((a for a in acs if (isinstance(a, dict) and a.get("ac_key") in ac_ids) or (isinstance(a, str) and any(aid in a for aid in ac_ids))), None)
+                if target_ac:
+                    if isinstance(target_ac, dict) and target_ac.get("inferred_path"):
+                        endpoint = target_ac["inferred_path"]
+                        method = target_ac.get("inferred_method") or method
+                    else:
+                        from app.utils.ac_parser import infer_endpoint_from_ac
+                        m_inf, p_inf = infer_endpoint_from_ac(str(target_ac), story.get("title", ""))
+                        endpoint = p_inf
+                        method = m_inf or method
+                else:
+                    matching_c = next((c for c in contracts if c.get("method", "").upper() == method.upper()), None)
+                    endpoint = matching_c.get("path") if matching_c else primary_endpoint
+
             req_spec = tc.get("request_spec") or {}
-            req_body = req_spec.get("body")
-            if method == "POST" and not req_body and is_password_story:
-                req_body = {
-                    "currentPassword": "<valid_current_password>",
-                    "newPassword": "<valid_new_password_meeting_policy>"
-                }
+            req_body = req_spec.get("body") or tc.get("actual_payload") or tc.get("payload") or tc.get("test_data") or tc.get("body")
+
+            # If POST/PUT/PATCH and body is missing, synthesize valid payload from endpoint/contract
+            if method in ("POST", "PUT", "PATCH") and (req_body is None or req_body == {}):
+                matching_c = next((c for c in (contracts or []) if c.get("path") == endpoint or c.get("method", "").upper() == method), None)
+                c_schema = (matching_c.get("request_schema") or {}) if matching_c else {}
+                if c_schema and isinstance(c_schema, dict):
+                    synth_body = {}
+                    for k in c_schema.keys():
+                        k_low = k.lower()
+                        if "email" in k_low:
+                            synth_body[k] = "test.user@example.com"
+                        elif "id" in k_low:
+                            synth_body[k] = "PR-10029"
+                        elif "name" in k_low or "title" in k_low:
+                            synth_body[k] = "Sample Title"
+                        elif "status" in k_low:
+                            synth_body[k] = "ACTIVE"
+                        else:
+                            synth_body[k] = f"sample_{k}"
+                    req_body = synth_body
+                else:
+                    slug = str(endpoint or "item").strip("/").split("/")[-1].rstrip("s")
+                    slug = re.sub(r"[{}]", "", slug) or "item"
+                    if "analyze" in str(endpoint).lower() or "analysis" in str(endpoint).lower():
+                        req_body = {"prospect_id": "PR-10029", "analysis_type": "full", "include_details": True}
+                    elif "prospect" in str(endpoint).lower():
+                        req_body = {"prospect_id": "PR-10029", "name": "John Doe", "status": "ACTIVE"}
+                    else:
+                        req_body = {f"{slug}_id": f"{slug.upper()}-1001", "name": f"Valid {slug.title()}", "status": "ACTIVE"}
 
             res_spec = tc.get("expected_response_spec") or {}
-            raw_status = res_spec.get("status_code")
+            raw_status = res_spec.get("status_code") or (200 if method != "POST" else 201)
             status_source = res_spec.get("status_source") or "ACCEPTANCE_CRITERIA"
             status_note = res_spec.get("status_note") or f"Grounded in {', '.join(ac_ids)}"
 
-            # Response body extraction: AC-02 explicitly defines 'Incorrect current password'
-            res_body = res_spec.get("response_body")
-            res_body_source = res_spec.get("response_body_source") or "UNKNOWN"
+            res_body = res_spec.get("response_body") or tc.get("actual_response")
+            res_body_source = res_spec.get("response_body_source") or "CONTRACT_SCHEMA"
             title_lower = (tc.get("title") or "").lower()
             desc_lower = (tc.get("description") or "").lower()
 
-            if "AC-02" in ac_ids or "incorrect current" in title_lower or "incorrect current" in desc_lower:
-                res_body = {"message": "Incorrect current password"}
-                res_body_source = "ACCEPTANCE_CRITERIA"
-                status_source = "ACCEPTANCE_CRITERIA"
-                raw_status = 400
-            elif is_password_story and ("AC-04" in ac_ids or "success" in title_lower):
-                # AC-04 does not define response body JSON
-                res_body = None
-                res_body_source = "UNKNOWN"
-                status_source = "ACCEPTANCE_CRITERIA"
-                raw_status = 200
-
-            # AC-05 Previous JWT invalidation handling
-            if "AC-05" in ac_ids or "previous jwt" in title_lower or "invalidation" in title_lower:
-                status_source = "AI_ASSUMPTION"
-                tc["requires_review"] = True
-                tc["assumption_details"] = "JWT invalidation rejection status code (HTTP 401) is inferred from security policy."
-
             assertions = res_spec.get("assertions")
             if not assertions:
-                if raw_status == 200:
+                if raw_status in (200, 201, 204):
                     assertions = [
-                        "response.status == 200",
-                        "Stored password hash is updated",
-                        "Password and password hash NOT returned in response body"
+                        f"response.status == {raw_status}",
+                        "Response matches defined contract schema",
+                        "Response time is within acceptable SLA"
                     ]
                 elif raw_status == 401:
                     assertions = [
                         "response.status == 401",
-                        "Request rejected due to missing or invalid JWT"
+                        "Request rejected due to missing or invalid authentication token"
                     ]
                 else:
                     assertions = [
@@ -489,8 +501,11 @@ INSTRUCTIONS:
                 "priority": tc.get("priority", "high"),
                 "risk": tc.get("risk", "medium"),
                 "preconditions": preconditions,
-                "test_data": test_data,
+                "test_data": test_data or req_body,
                 "test_data_source": "AI_DERIVED",
+                "actual_payload": req_body,
+                "payload": req_body,
+                "actual_response": res_body,
                 "test_steps": test_steps,
                 "request_spec": {
                     "method": method,
@@ -526,9 +541,17 @@ INSTRUCTIONS:
         """Systematically derives justified scenarios covering AC-01 through AC-07 with compound expansion."""
         story_full_text = f"{story.get('title', '')} {story.get('description', '')}".lower()
         is_password_story = any(kw in story_full_text for kw in ("password", "change-password", "change password"))
-        service_name = (contracts[0].get("service") if contracts else "AuthService") or "AuthService"
-        base_entity = "".join(c for c in service_name if c.isalnum()) or "Auth"
-        endpoint = "/api/auth/change-password" if is_password_story else (contracts[0].get("path") if contracts else f"/api/{base_entity.lower()}s")
+        
+        # Use real endpoint from discovered codebase contracts first
+        contract_path = (contracts[0].get("path") if contracts else "") or (contracts[0].get("url") if contracts else "")
+        if contract_path:
+            endpoint = contract_path
+        elif is_password_story:
+            endpoint = "/api/auth/change-password"
+        else:
+            service_name = (contracts[0].get("service") if contracts else "CoreService") or "CoreService"
+            base_entity = "".join(c for c in service_name if c.isalnum()) or "Core"
+            endpoint = f"/api/{base_entity.lower()}"
 
         derived = []
 
@@ -1136,44 +1159,128 @@ INSTRUCTIONS:
             })
 
         else:
-            # Generic AC-driven scenario derivation for any story
+            # Generic AC-driven scenario derivation grounded in distinct AC endpoints and contracts
+            from app.utils.ac_parser import infer_endpoint_from_ac
+
             for idx, raw_ac in enumerate(acs if acs else [story.get("title", "Feature")], start=1):
                 ac_k = f"AC-{idx:02d}"
                 ac_txt = raw_ac.get("text") if isinstance(raw_ac, dict) else str(raw_ac)
+                is_pos = (idx == 1)
+
+                if isinstance(raw_ac, dict) and raw_ac.get("inferred_path"):
+                    ac_method = raw_ac.get("inferred_method", "GET").upper()
+                    ac_path = raw_ac.get("inferred_path")
+                else:
+                    ac_method, ac_path = infer_endpoint_from_ac(ac_txt, story.get("title", ""))
+
+                # Find matching contract if available
+                matching_contract = None
+                if ac_path:
+                    for c in (contracts or []):
+                        c_path = c.get("path") or ""
+                        if c_path and (c_path == ac_path or c_path.strip("/") in ac_path or ac_path.strip("/") in c_path):
+                            matching_contract = c
+                            break
+                if not matching_contract and contracts:
+                    matching_contract = contracts[min(idx - 1, len(contracts) - 1)]
+
+                if not ac_path and matching_contract:
+                    ac_path = matching_contract.get("path") or "/api"
+                    ac_method = matching_contract.get("method") or ac_method
+                elif not ac_path:
+                    ac_path = "/api"
+
+                schema = (matching_contract.get("request_schema") or {}) if matching_contract else {}
+                
+                # Build authentic base payload matching endpoint schema or dynamic fields
+                slug = ac_path.strip("/").split("/")[-1].rstrip("s") or "item"
+                slug = re.sub(r"[{}]", "", slug)
+                
+                if ac_method in ("POST", "PUT", "PATCH"):
+                    if schema and isinstance(schema, dict) and len(schema) > 0:
+                        base_payload = {}
+                        for k, v in schema.items():
+                            k_low = k.lower()
+                            v_str = str(v).lower()
+                            if "email" in k_low:
+                                base_payload[k] = "test.user@example.com"
+                            elif "id" in k_low:
+                                base_payload[k] = f"{slug.upper()}-1001"
+                            elif "name" in k_low or "title" in k_low:
+                                base_payload[k] = f"Valid {slug.title()}"
+                            elif "status" in k_low:
+                                base_payload[k] = "ACTIVE"
+                            elif "pass" in k_low:
+                                base_payload[k] = "ValidPass@123"
+                            elif "phone" in k_low or "mobile" in k_low:
+                                base_payload[k] = "+1234567890"
+                            elif "int" in v_str or "number" in v_str or "count" in k_low or "age" in k_low:
+                                base_payload[k] = 25
+                            elif "bool" in v_str:
+                                base_payload[k] = True
+                            elif "float" in v_str or "price" in k_low or "amount" in k_low:
+                                base_payload[k] = 99.99
+                            else:
+                                base_payload[k] = f"sample_{k}"
+                    elif "user" in ac_path.lower():
+                        base_payload = {"user_id": "USR-9901", "email": "user@example.com", "name": "Test User"}
+                    elif "auth" in ac_path.lower() or "login" in ac_path.lower():
+                        base_payload = {"username": "testuser", "password": "ValidPassword@123"}
+                    else:
+                        base_payload = {f"{slug}_id": f"{slug.upper()}-1001", "name": f"Valid {slug.title()}", "status": "ACTIVE"}
+                else:
+                    base_payload = None
+
+                # Payload adjustment per scenario
+                tc_payload = dict(base_payload) if isinstance(base_payload, dict) else None
+                if not is_pos and isinstance(tc_payload, dict):
+                    first_k = next(iter(tc_payload.keys()), None)
+                    if first_k:
+                        if "id" in first_k.lower():
+                            tc_payload[first_k] = "NON_EXISTENT_ID_999"
+                        elif "email" in first_k.lower():
+                            tc_payload[first_k] = "invalid-email-format"
+                        elif "pass" in first_k.lower():
+                            tc_payload[first_k] = "short"
+                        else:
+                            tc_payload.pop(first_k, None)
+
+                exp_status = (200 if ac_method != "POST" else 201) if is_pos else (404 if not is_pos and idx == 2 else 422)
+
                 derived.append({
                     "test_key": f"TC-{clean_story_key}-{idx:03d}",
-                    "scenario_type": "positive" if idx == 1 else "negative",
+                    "scenario_type": "positive" if is_pos else "negative",
                     "test_type": "API",
                     "title": f"Verify {ac_k}: {ac_txt[:60]}",
                     "description": ac_txt,
                     "story_reference": f"{ac_k}: {ac_txt}",
                     "acceptance_criteria_ids": [ac_k],
-                    "priority": "high" if idx == 1 else "medium",
+                    "priority": "high" if is_pos else "medium",
                     "risk": "medium",
-                    "preconditions": ["User account exists in system", "Valid authorization available"],
-                    "test_data": {"sampleField": "SampleValue"},
+                    "preconditions": ["Target backend service running", "Valid authorization available"],
+                    "test_data": tc_payload or {},
                     "test_data_source": "AI_DERIVED",
                     "test_steps": [
                         f"Step 1 (Arrange): Setup test payload for {ac_k}",
-                        f"Step 2 (Act): Invoke {endpoint}",
-                        f"Step 3 (Assert): Verify response satisfies {ac_k}"
+                        f"Step 2 (Act): Invoke {ac_method} {ac_path}",
+                        f"Step 3 (Assert): Verify response satisfies {ac_k} with HTTP {exp_status}"
                     ],
                     "request_spec": {
-                        "method": "POST",
-                        "endpoint": endpoint,
+                        "method": ac_method,
+                        "endpoint": ac_path,
                         "headers": {"Content-Type": "application/json", "Authorization": "Bearer <valid_token>"},
-                        "body": {"sampleField": "SampleValue"}
+                        "body": tc_payload
                     },
                     "expected_response_spec": {
-                        "status_code": 200 if idx == 1 else 400,
+                        "status_code": exp_status,
                         "status_source": "ACCEPTANCE_CRITERIA",
                         "status_note": f"Derived from {ac_k}",
                         "response_body": None,
                         "response_body_source": "UNKNOWN",
-                        "assertions": [f"response.status == {200 if idx == 1 else 400}"]
+                        "assertions": [f"response.status == {exp_status}"]
                     },
-                    "expected_status_code": 200 if idx == 1 else 400,
-                    "expected_result": f"API responds with HTTP {200 if idx == 1 else 400}, satisfying {ac_k}.",
+                    "expected_status_code": exp_status,
+                    "expected_result": f"API responds with HTTP {exp_status}, satisfying {ac_k}.",
                     "grounding_metadata": {
                         "endpoint": {"source": "API_CONTRACT", "reference": ac_k},
                         "status_code": {"source": "ACCEPTANCE_CRITERIA", "reference": ac_k},

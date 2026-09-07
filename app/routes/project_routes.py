@@ -83,6 +83,7 @@ def add_project():
     coding_standard = body.get("coding_standard", "checkstyle-google").strip()
 
     git_repo_url = body.get("git_repo_url", "").strip() or None
+    base_url = body.get("base_url", "").strip() or body.get("api_base_url", "").strip() or None
     git_provider = body.get("git_provider", "github").strip()
     git_branch = body.get("git_branch", "main").strip()
     base_branch = body.get("base_branch", "main").strip()
@@ -109,6 +110,7 @@ def add_project():
         project_uuid, key_code, name, description,
         target_language, target_framework, coding_standard, g.user_id,
         git_repo_url=git_repo_url,
+        base_url=base_url,
         git_provider=git_provider,
         git_branch=git_branch,
         base_branch=base_branch,
@@ -131,10 +133,38 @@ def add_project():
     """, (project_id, g.user_id))
 
     audit("project_creation", user_id=g.user_id, project_id=project_id, status="SUCCESS",
-          metadata={"key_code": key_code, "name": name, "git_branch": git_branch, "tech_stack": tech_stack, "app_type": app_type})
+          metadata={"key_code": key_code, "name": name, "git_branch": git_branch, "tech_stack": tech_stack, "app_type": app_type, "base_url": base_url})
 
-    return ok({"project_id": project_id, "uuid": project_uuid, "key_code": key_code, "name": name},
+    return ok({"project_id": project_id, "uuid": project_uuid, "key_code": key_code, "name": name, "base_url": base_url},
               "Project created successfully", 201)
+
+
+@project_bp.route("/projects/<uuid>", methods=["PUT", "PATCH"])
+@require_auth
+@require_permission("project.write")
+def update_project_route(uuid):
+    body = request.get_json(silent=True) or {}
+    p = get_project(uuid)
+    if not p:
+        return fail("NOT_FOUND", "Project not found", 404)
+
+    from app.repositories.project_repo import update_project
+    update_data = {}
+    for k in ["name", "description", "git_repo_url", "base_url", "git_branch", "base_branch",
+              "tech_stack", "build_tool", "app_type", "deployment_target", "target_language",
+              "target_framework", "coding_standard", "frontend_framework", "backend_framework"]:
+        if k in body:
+            update_data[k] = body[k].strip() if isinstance(body[k], str) else body[k]
+
+    if "api_base_url" in body and "base_url" not in update_data:
+        update_data["base_url"] = body["api_base_url"].strip() if isinstance(body["api_base_url"], str) else body["api_base_url"]
+
+    if update_data:
+        update_project(uuid, **update_data)
+
+    updated_p = get_project(uuid)
+    return ok({"project": updated_p}, "Project updated successfully")
+
 
 
 @project_bp.route("/projects/test-git-connection", methods=["POST"])
@@ -239,11 +269,14 @@ def add_story():
     story_uuid = str(_uuid.uuid4())
     story_id = create_story(story_uuid, project["id"], external_key, title, description, sprint, g.user_id)
 
-    # Insert acceptance criteria if provided
+    from app.utils.ac_parser import extract_clean_acceptance_criteria
+    clean_acs = extract_clean_acceptance_criteria(title, description, acceptance_criteria)
+
+    # Insert acceptance criteria
     inserted_acs = []
-    for idx, ac in enumerate(acceptance_criteria, start=1):
-        ac_key = ac.get("ac_key") if isinstance(ac, dict) else f"AC-{idx}"
-        ac_text = ac.get("text") if isinstance(ac, dict) else str(ac)
+    for ac in clean_acs:
+        ac_key = ac["ac_key"]
+        ac_text = ac["text"]
         if ac_text.strip():
             ac_uuid = str(_uuid.uuid4())
             create_acceptance_criterion(ac_uuid, story_id, ac_key, ac_text.strip())

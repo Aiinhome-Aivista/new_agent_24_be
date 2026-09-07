@@ -268,15 +268,25 @@ def save_execution_run_with_results(run_uuid, workflow_id, runner, environment, 
             result_id = cur.lastrowid
 
             req = r.get("request") or {}
+            req_headers = req.get("headers") or {}
+            req_headers_str = json.dumps(req_headers, default=str) if isinstance(req_headers, (dict, list)) else str(req_headers or "")
+            req_body = req.get("body") if req.get("body") is not None else r.get("request_body")
+            req_body_str = json.dumps(req_body, default=str) if (req_body is not None and not isinstance(req_body, str)) else (req_body or "")
+
             cur.execute("""INSERT INTO api_requests (execution_result_id, method, url, headers, body)
                            VALUES (%s,%s,%s,%s,%s)""",
                         (result_id, req.get("method", "GET"), req.get("url", ""),
-                         json.dumps(req.get("headers") or {}, default=str), req.get("body")))
+                         req_headers_str, req_body_str))
+
+            resp_headers = r.get("response_headers") or r.get("headers") or {}
+            resp_headers_str = json.dumps(resp_headers, default=str) if isinstance(resp_headers, (dict, list)) else str(resp_headers or "")
+            resp_body = r.get("response_body")
+            resp_body_str = json.dumps(resp_body, default=str) if (resp_body is not None and not isinstance(resp_body, str)) else (resp_body or "")
 
             cur.execute("""INSERT INTO api_responses (execution_result_id, status_code, headers, body, raw_log_reference)
                            VALUES (%s,%s,%s,%s,%s)""",
-                        (result_id, r.get("status_code"), json.dumps(r.get("headers") or {}, default=str),
-                         r.get("response_body"), None))
+                        (result_id, r.get("status_code"), resp_headers_str,
+                         resp_body_str, None))
         return run_id
 
 

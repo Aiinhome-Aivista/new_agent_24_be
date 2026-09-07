@@ -128,7 +128,8 @@ def run_live_test(workflow_id):
         run_result = LiveApiRunner().run(
             collection_path=None, 
             environment=environment, 
-            test_cases=[scenario]
+            test_cases=[scenario],
+            workflow_id=workflow_id or "default"
         )
         
         result_data = run_result.results[0] if run_result.results else {}
@@ -146,6 +147,7 @@ def live_proxy():
         body = request.get_json(silent=True) or {}
         scenario = body.get("scenario") or {}
         environment = body.get("environment", "http://localhost:8080")
+        wf_id = body.get("workflow_id", "direct")
 
         if not scenario:
             return fail("VALIDATION_ERROR", "Request specification is required")
@@ -153,7 +155,8 @@ def live_proxy():
         run_result = LiveApiRunner().run(
             collection_path=None,
             environment=environment,
-            test_cases=[scenario]
+            test_cases=[scenario],
+            workflow_id=wf_id
         )
 
         result_data = run_result.results[0] if run_result.results else {}

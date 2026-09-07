@@ -30,36 +30,9 @@ def start_workflow():
         return fail("CONFLICT", f"A workflow already exists for this story (Workflow ID: {existing_wf['workflow_id']})", 409, details={"existing_workflow_id": existing_wf["workflow_id"], "status": existing_wf["status"]})
 
     project = query("SELECT * FROM projects WHERE id=%s", (story["project_id"],), fetchone=True)
-    acs = story_acceptance_criteria(story["id"])
-    
-    # If no criteria in DB table, extract from story description/title
-    if not acs:
-        desc = story.get("description", "") or ""
-        extracted = []
-        if desc:
-            lines = [line.strip().lstrip("-*•1234567890. ") for line in desc.split("\n") if line.strip()]
-            for l in lines:
-                low = l.lower()
-                # Skip story narrative template lines
-                if (len(l) > 6 and not l.startswith("#") 
-                        and not low.startswith("as a") 
-                        and not low.startswith("i want") 
-                        and not low.startswith("so that") 
-                        and not low.startswith("in order") 
-                        and not low.startswith("user story")
-                        and not low.startswith("acceptance criteria")
-                        and not low.startswith("description")):
-                    extracted.append({"text": l})
-        if not extracted:
-            entity_name = "user" if "user" in story.get("title", "").lower() else "resource"
-            extracted = [
-                {"text": f"{entity_name.capitalize()} can be created through REST API via POST /api/{entity_name}s with valid parameters"},
-                {"text": f"{entity_name.capitalize()} details can be retrieved by ID via GET /api/{entity_name}s/{{id}}"},
-                {"text": f"{entity_name.capitalize()} details can be updated via PUT /api/{entity_name}s/{{id}}"},
-                {"text": f"{entity_name.capitalize()} can be deleted via DELETE /api/{entity_name}s/{{id}}"},
-                {"text": f"Invalid or duplicate request data is rejected with appropriate 4xx validation error"}
-            ]
-        acs = extracted
+    from app.utils.ac_parser import extract_clean_acceptance_criteria
+    db_acs = story_acceptance_criteria(story["id"])
+    acs = extract_clean_acceptance_criteria(story.get("title", ""), story.get("description", ""), db_acs)
 
     contracts = query("""SELECT c.method, c.path, s.name AS service FROM api_contracts c
                          JOIN services s ON s.id=c.service_id WHERE s.project_id=%s""",
@@ -70,36 +43,25 @@ def start_workflow():
         story_text = f"{story.get('title', '')} {story.get('description', '')}".lower()
         ac_combined = " ".join(a.get("text", "") for a in acs)
         all_text = f"{story_text} {ac_combined.lower()}"
+        service_name = "AuthService" if any(k in all_text for k in ("auth", "password", "jwt", "login")) else ((project or {}).get("name") or "CoreService")
 
-        # 1. Look for explicit endpoints in Acceptance Criteria (e.g. POST /api/auth/change-password)
-        import re
-        extracted_endpoints = re.findall(r'(GET|POST|PUT|DELETE|PATCH)\s+([/a-zA-Z0-9_\-\/{}\.]+)', ac_combined, re.IGNORECASE)
-        if extracted_endpoints:
-            contracts = []
-            service_name = "AuthService" if any(k in all_text for k in ("auth", "password", "jwt", "login")) else "CoreService"
-            for m, p in extracted_endpoints:
-                clean_p = p.rstrip('`,.')
-                if clean_p.startswith('/'):
+        contracts = []
+        seen_eps = set()
+        for ac in acs:
+            m = (ac.get("inferred_method") or "GET").upper()
+            p = ac.get("inferred_path")
+            if p:
+                sig = f"{m} {p}"
+                if sig not in seen_eps:
+                    seen_eps.add(sig)
                     contracts.append({
                         "service": service_name,
-                        "method": m.upper(),
-                        "path": clean_p
+                        "method": m,
+                        "path": p
                     })
 
-        if not contracts and not (project or {}).get("git_repo_url"):
-            # Only generate fallback endpoint if no git repo is connected
-            clean_name = "".join(c for c in story.get("title", "resource") if c.isalnum() or c in " -_").strip()
-            endpoint_slug = clean_name.lower().replace(" ", "-") or "resources"
-            if not endpoint_slug.endswith("s"):
-                endpoint_slug += "s"
-            service_name = (project or {}).get("name", "CoreService")
-            # Determine main method from story title
-            main_method = "POST" if any(k in story_text for k in ("create", "add", "register", "insert", "new")) else "GET"
-            contracts = [
-                {"service": service_name, "method": main_method, "path": f"/api/{endpoint_slug}"}
-            ]
-
     workflow_id = str(_uuid.uuid4())
+    environment = body.get("environment") or body.get("base_url") or (project or {}).get("base_url") or (project or {}).get("api_base_url")
     state = {
         "current_stage": REQUIREMENT_ANALYSIS,
         "status": QUEUED,
@@ -108,6 +70,7 @@ def start_workflow():
         "acceptance_criteria": [a["text"] for a in acs],
         "api_contracts": contracts,
         "capabilities": capabilities,
+        "environment": environment,
     }
 
     # Clone / pull the git repo if configured

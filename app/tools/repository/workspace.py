@@ -353,7 +353,21 @@ class GitWorkspace:
         port = None
         context_path = ""
 
-        # 1. Spring Boot application.properties or application.yml
+        # 1. Check GitHub deployment workflows (e.g. .github/workflows/deploy.yml with PORT: 3035)
+        for deploy_path in (ws / ".github" / "workflows").glob("*.yml") if (ws / ".github" / "workflows").exists() else []:
+            try:
+                content = deploy_path.read_text(encoding="utf-8", errors="replace")
+                for line in content.split("\n"):
+                    line = line.strip()
+                    if line.startswith("PORT:") or line.startswith("PORT :") or line.startswith("SERVER_PORT:"):
+                        val = line.split(":", 1)[1].strip().strip("'\"")
+                        if val.isdigit():
+                            port = val
+                            break
+            except Exception:
+                pass
+
+        # 2. Spring Boot application.properties or application.yml
         for prop_path in [
             ws / "src" / "main" / "resources" / "application.properties",
             ws / "src" / "main" / "resources" / "application.yml",
@@ -382,19 +396,19 @@ class GitWorkspace:
                 except Exception:
                     pass
 
-        # 2. Check .env file
-        env_file = ws / ".env"
-        if not port and env_file.exists():
-            try:
-                content = env_file.read_text(encoding="utf-8", errors="replace")
-                for line in content.split("\n"):
-                    line = line.strip()
-                    if line.startswith("PORT=") or line.startswith("SERVER_PORT="):
-                        val = line.split("=")[1].strip()
-                        if val.isdigit():
-                            port = val
-            except Exception:
-                pass
+        # 3. Check .env file or backend/config.py
+        for env_path in [ws / ".env", ws / "backend" / ".env", ws / ".env.example"]:
+            if not port and env_path.exists():
+                try:
+                    content = env_path.read_text(encoding="utf-8", errors="replace")
+                    for line in content.split("\n"):
+                        line = line.strip()
+                        if line.startswith("PORT=") or line.startswith("SERVER_PORT="):
+                            val = line.split("=")[1].strip()
+                            if val.isdigit():
+                                port = val
+                except Exception:
+                    pass
 
         structure = self.find_project_structure()
         lang = structure.get("language")
@@ -465,4 +479,97 @@ class GitWorkspace:
                 continue
 
         return "\n\n".join(parts)
+
+    def parse_codebase_routes(self) -> list:
+        """Statically scans codebase files to extract EXACT implemented REST API endpoints."""
+        if not self.exists:
+            return []
+        
+        all_files = self.list_files()
+        routes = []
+        import re
+
+        for f in all_files:
+            lower = f.lower()
+            if any(skip in lower for skip in ("test", "node_modules", "target", "build", ".git", "dist")):
+                continue
+            if not any(f.endswith(ext) for ext in (".py", ".java", ".ts", ".js", ".kt", ".cs", ".go")):
+                continue
+            
+            try:
+                content = self.read_file(f, max_size=50000)
+            except Exception:
+                continue
+
+            # 1. FastAPI / Flask / Python
+            py_prefix = ""
+            py_prefix_match = re.search(r'(?:APIRouter|Blueprint)\s*\([^)]*?(?:prefix|url_prefix)\s*=\s*["\']([^"\']+)["\']', content)
+            if py_prefix_match:
+                py_prefix = py_prefix_match.group(1).rstrip("/")
+
+            py_matches = re.findall(r'@(?:router|app)\.(get|post|put|delete|patch)\s*\(\s*["\']([^"\']+)["\']', content, re.IGNORECASE)
+            for m, p in py_matches:
+                clean_p = p.strip()
+                full_p = f"{py_prefix}/{clean_p.lstrip('/')}" if py_prefix else clean_p
+                if not full_p.startswith("/"):
+                    full_p = f"/{full_p}"
+                routes.append({"method": m.upper(), "path": full_p, "source_file": f})
+
+            flask_route_matches = re.findall(r'@(?:app|blueprint|bp|[a-zA-Z0-9_]+_bp)\.route\s*\(\s*["\']([^"\']+)["\'](?:.*?methods\s*=\s*\[(.*?)\])?', content, re.IGNORECASE)
+            for p, methods_str in flask_route_matches:
+                m_list = re.findall(r'["\'](GET|POST|PUT|DELETE|PATCH)["\']', methods_str, re.IGNORECASE) if methods_str else ["GET"]
+                clean_p = p.strip()
+                full_p = f"{py_prefix}/{clean_p.lstrip('/')}" if py_prefix else clean_p
+                if not full_p.startswith("/"):
+                    full_p = f"/{full_p}"
+                for m in m_list:
+                    routes.append({"method": m.upper(), "path": full_p, "source_file": f})
+
+            # 2. Spring Boot / Java / Kotlin
+            class_prefix = ""
+            class_req = re.search(r'@RequestMapping\s*\(\s*(?:value\s*=\s*)?["\']([^"\']+)["\']', content)
+            if class_req:
+                class_prefix = class_req.group(1).rstrip("/")
+
+            spring_matches = re.findall(r'@(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping)\s*(?:\(\s*(?:value\s*=\s*)?["\']?([^"\'\)]*)["\']?\s*\))?', content)
+            for annot, p in spring_matches:
+                verb = annot.replace("Mapping", "").upper()
+                clean_p = p.strip() if p else ""
+                full_p = f"{class_prefix}/{clean_p.lstrip('/')}" if class_prefix or clean_p else (clean_p or "/")
+                if not full_p.startswith("/"):
+                    full_p = f"/{full_p}"
+                routes.append({"method": verb, "path": full_p, "source_file": f})
+
+            # 3. Express / Node / NestJS
+            nest_prefix = ""
+            nest_ctrl = re.search(r'@Controller\s*\(\s*["\']?([^"\'\)]*)["\']?\s*\)', content)
+            if nest_ctrl:
+                nest_prefix = nest_ctrl.group(1).strip().rstrip("/")
+
+            js_matches = re.findall(r'(?:router|app)\.(get|post|put|delete|patch)\s*\(\s*["\']([^"\']+)["\']', content, re.IGNORECASE)
+            for m, p in js_matches:
+                clean_p = p.strip()
+                if not clean_p.startswith("/"):
+                    clean_p = f"/{clean_p}"
+                routes.append({"method": m.upper(), "path": clean_p, "source_file": f})
+
+            nest_matches = re.findall(r'@(Get|Post|Put|Delete|Patch)\s*\(\s*["\']?([^"\'\)]*)["\']?\s*\)', content)
+            for annot, p in nest_matches:
+                verb = annot.upper()
+                clean_p = p.strip() if p else ""
+                full_p = f"{nest_prefix}/{clean_p.lstrip('/')}" if nest_prefix or clean_p else (clean_p or "/")
+                if not full_p.startswith("/"):
+                    full_p = f"/{full_p}"
+                routes.append({"method": verb, "path": full_p, "source_file": f})
+
+        # Deduplicate routes
+        seen = set()
+        deduped_routes = []
+        for r in routes:
+            k = (r["method"], r["path"])
+            if k not in seen:
+                seen.add(k)
+                deduped_routes.append(r)
+
+        return deduped_routes
 

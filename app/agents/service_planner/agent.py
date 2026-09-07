@@ -1,156 +1,87 @@
 import json
+import re
 from app.agents.base import BaseAgent
 from app.llm.model_router.router import get_router
 from app.workflows.state_machine import TEST_PLANNING, BLOCKED
 
-_SYSTEM_PROMPT = """You are a senior software architect and API test engineer planning manual and automated test execution.
+_SYSTEM_PROMPT = """You are a principal software architect and API test engineer planning manual and automated test execution.
 
-Analyze the provided User Story, Acceptance Criteria, Server Base URL, and Git Codebase Context (Controllers, Routes, DTOs, Schemas) to accurately extract ONLY the target API endpoints, Request Payload schemas, Expected Response schemas, and REALISTIC MANUAL TEST SCENARIOS covering every relevant HTTP status code.
+CRITICAL DIRECTIVES:
+1. STRICT GROUNDING IN CODEBASE: You MUST inspect the provided "Discovered Real Implemented Routes in Codebase" and "Git Codebase Context". You MUST select the EXACT API endpoint (method + path, e.g. `/api/auth/change-password`, `/api/users/register`, `/api/orders/{id}`) from the codebase that matches the User Story.
+2. ZERO PLACEHOLDERS: NEVER invent generic placeholder paths (e.g. `/api/resource`, `/api/endpoint`, `/api/resource/action` are STRICTLY FORBIDDEN). If real routes are provided, you MUST choose the matching real route.
+3. EXACT REQUEST PAYLOAD SCHEMA: Inspect the function signature, `@router` / `@PostMapping` parameter, and the corresponding Pydantic `BaseModel` / DTO / Schema in the Codebase Context. Return the actual field names with their exact types and constraints.
+4. EXACT EXPECTED RESPONSE SCHEMA: Inspect the controller method's `response_model` or return DTO class. Return the exact structure and field names.
+5. CONCRETE, REALISTIC TEST SCENARIOS: For every scenario (`actual_payload` and `actual_response`), provide authentic, realistic sample data matching the exact fields for this specific story entity.
 
 Return a valid JSON object matching this structure:
 {
-  "impacted_services": ["service_name_1"],
+  "impacted_services": ["ServiceName"],
   "extracted_apis": [
     {
       "method": "POST",
-      "url": "http://localhost:8080/api/customers",
-      "path": "/api/customers",
-      "purpose": "Create a new customer record with server-side validation",
-      "source_file": "src/controllers/CustomerController.py",
-      "handler_function": "create_customer()",
+      "url": "http://server-base-url/api/exact/codebase/route",
+      "path": "/api/exact/codebase/route",
+      "purpose": "Accurate description of what this endpoint does",
+      "source_file": "controllers/auth_controller.py",
+      "handler_function": "handle_action()",
       "payload_schema": {
-        "address": "string (optional)",
-        "email": "string (required, valid email format)",
-        "first_name": "string (required, 2-50 chars)",
-        "last_name": "string (required, 2-50 chars)",
-        "phone": "string (required, regex ^\\+?\\d{7,15}$)"
+        "field_name": "string (required, description of field)"
       },
       "response_schema": {
-        "status_code": 201,
-        "description": "Customer entity created and returned",
+        "status_code": 200,
+        "description": "Successful operation response",
         "body": {
-          "id": "number (auto-increment primary key)",
-          "email": "string",
-          "first_name": "string",
-          "last_name": "string",
-          "phone": "string",
-          "address": "string",
-          "created_at": "string (ISO-8601 timestamp)"
+          "status": "string",
+          "data": "object"
         }
       },
       "test_scenarios": [
         {
           "id": "TS-01",
-          "title": "201 Created (Valid Customer)",
-          "status_code": 201,
-          "status_text": "201 Created",
+          "title": "200 OK — Successful Valid Request",
+          "status_code": 200,
+          "status_text": "200 OK",
           "scenario_type": "POSITIVE",
-          "description": "Sending complete and valid customer payload should successfully create the record",
+          "description": "Executing request with valid payload returns 200 OK",
           "actual_payload": {
-            "first_name": "Rahim",
-            "last_name": "Khan",
-            "email": "rahim.khan@example.com",
-            "phone": "+8801712345678",
-            "address": "House 12, Road 5, Dhaka"
+            "field_name": "sample_valid_value"
           },
           "actual_response": {
-            "id": 101,
-            "first_name": "Rahim",
-            "last_name": "Khan",
-            "email": "rahim.khan@example.com",
-            "phone": "+8801712345678",
-            "address": "House 12, Road 5, Dhaka",
-            "created_at": "2026-09-03T12:00:00Z"
+            "status": "success",
+            "message": "Operation completed successfully"
           }
         },
         {
           "id": "TS-02",
-          "title": "400 Bad Request (Invalid Email)",
+          "title": "400 Bad Request / 404 Not Found — Invalid Request",
           "status_code": 400,
           "status_text": "400 Bad Request",
           "scenario_type": "NEGATIVE",
-          "description": "Sending an invalid email format string should trigger 400 validation error",
+          "description": "Submitting invalid identifier returns error",
           "actual_payload": {
-            "first_name": "Rahim",
-            "last_name": "Khan",
-            "email": "invalid-email-format",
-            "phone": "+8801712345678",
-            "address": "House 12, Road 5, Dhaka"
+            "field_name": "invalid_value"
           },
           "actual_response": {
-            "timestamp": "2026-09-03T12:00:01Z",
-            "status": 400,
-            "error": "Bad Request",
-            "message": "Validation failed for field 'email': must be a well-formed email address",
-            "path": "/api/customers"
-          }
-        },
-        {
-          "id": "TS-03",
-          "title": "400 Bad Request (Missing Phone)",
-          "status_code": 400,
-          "status_text": "400 Bad Request",
-          "scenario_type": "NEGATIVE",
-          "description": "Omitting required phone field should be rejected with 400 Bad Request",
-          "actual_payload": {
-            "first_name": "Rahim",
-            "last_name": "Khan",
-            "email": "rahim.khan@example.com",
-            "address": "House 12, Road 5, Dhaka"
-          },
-          "actual_response": {
-            "timestamp": "2026-09-03T12:00:02Z",
-            "status": 400,
-            "error": "Bad Request",
-            "message": "Validation failed: phone is required and cannot be blank",
-            "path": "/api/customers"
-          }
-        },
-        {
-          "id": "TS-04",
-          "title": "409 Conflict (Duplicate Record)",
-          "status_code": 409,
-          "status_text": "409 Conflict",
-          "scenario_type": "NEGATIVE",
-          "description": "Attempting to create a customer with an email that already exists in the system",
-          "actual_payload": {
-            "first_name": "Karim",
-            "last_name": "Ahmed",
-            "email": "rahim.khan@example.com",
-            "phone": "+8801798765432"
-          },
-          "actual_response": {
-            "timestamp": "2026-09-03T12:00:03Z",
-            "status": 409,
-            "error": "Conflict",
-            "message": "A customer with email 'rahim.khan@example.com' already exists",
-            "path": "/api/customers"
+            "detail": "Validation error"
           }
         }
       ]
     }
   ],
   "dependency_graph": {
-    "nodes": ["service_name_1"],
+    "nodes": ["ServiceName"],
     "edges": []
   },
   "test_plan": [
     {
-      "service": "service_name_1",
+      "service": "ServiceName",
       "endpoints": [
-        {"method": "POST", "path": "/api/customers", "test_priority": "high", "notes": "Validate customer creation & payload"}
+        {"method": "POST", "path": "/api/exact/codebase/route", "test_priority": "high", "notes": "Verify core functionality"}
       ],
       "test_strategy": "integration"
     }
   ]
 }
-
-STRICT INSTRUCTIONS:
-1. ONLY STORY-RELEVANT APIS: Extract ONLY the API endpoints that are strictly needed to implement this specific User Story (e.g. if the story is 'Create Customer', extract ONLY the creation endpoint). DO NOT list unrelated GET, PUT, or DELETE endpoints unless the Acceptance Criteria explicitly ask to verify or query them.
-2. FULL URL: The 'url' field MUST be the complete URL with protocol, host, and port using the provided Server Base URL (e.g., 'http://localhost:8080/api/customers'). Provide the relative endpoint in 'path'.
-3. REAL CODEBASE RESPONSE SCHEMA: Inspect the controller method's return type, return statements, and the corresponding response DTO / Entity / Model class in the Git Codebase Context. Return EVERY field defined in that response class/model.
-4. REAL CODEBASE REQUEST PAYLOAD: Inspect the controller's request body parameter and the corresponding DTO / Model / Schema class in the Git Codebase Context. Return all fields with their exact types and validation constraints.
-5. COMPLETE MANUAL TEST SCENARIOS: Generate multiple realistic manual test scenarios covering every status code (e.g. 201 Success, 400 Bad Request for each validation rule violated, 409 Duplicate/Conflict, 401 Unauthorized if auth is used). Each scenario MUST contain concrete `actual_payload` and authentic `actual_response`!
 """
 
 
@@ -163,9 +94,10 @@ class ServicePlannerAgent(BaseAgent):
         story = state.get("story", {})
         analysis = state.get("analysis", {})
 
-        # Extract codebase context and detect base URL from Git workspace
+        # Extract codebase context and detect base URL from Git workspace or project configuration
         codebase_context = ""
-        base_url = "http://localhost:8080"
+        discovered_routes = []
+        base_url = state.get("environment") or project.get("base_url") or project.get("api_base_url") or project.get("environment_url") or ""
         project_uuid = project.get("uuid") or project.get("id")
         git_repo_url = project.get("git_repo_url", "")
         if project_uuid and git_repo_url:
@@ -176,19 +108,21 @@ class ServicePlannerAgent(BaseAgent):
                     repo_url=git_repo_url,
                     branch=project.get("git_branch", "main")
                 )
-                codebase_context = ws.extract_api_route_context(max_files=25, max_bytes_per_file=6000)
-                base_url = ws.detect_base_url()
+                codebase_context = ws.extract_api_route_context(max_files=35, max_bytes_per_file=8000)
+                discovered_routes = ws.parse_codebase_routes()
+                if not base_url:
+                    base_url = ws.detect_base_url()
                 if codebase_context:
                     print(f"[ServicePlanner] Injected {len(codebase_context)} chars of API & Route code from Git workspace (Base URL: {base_url}).")
+                if discovered_routes:
+                    print(f"[ServicePlanner] Discovered {len(discovered_routes)} implemented routes in repository:")
+                    for r in discovered_routes[:10]:
+                        print(f"   * {r['method']} {r['path']} ({r['source_file']})")
             except Exception as e:
                 print(f"[ServicePlanner] Note: Could not read Git workspace: {e}")
 
-        if not contracts and not codebase_context:
-            state.setdefault("errors", []).append(
-                {"agent": self.name, "message": "No API contracts or codebase found — planning exception."})
-            state["status"] = BLOCKED
-            self._record(workflow_id, "service_planning", status="BLOCKED")
-            return state
+        if not base_url:
+            base_url = "http://localhost:8080"
 
         print(f"\n[ServicePlanner] Planning API architecture and test strategy for story '{story.get('title', '')}'...")
         for c in contracts:
@@ -198,10 +132,15 @@ class ServicePlannerAgent(BaseAgent):
         contract_lines = []
         for c in contracts:
             contract_lines.append(f"  - {c.get('method', 'GET')} {c.get('path', '/')} (service: {c.get('service', 'unknown')})")
-        contracts_text = "\n".join(contract_lines) if contract_lines else "None provided in DB - analyze codebase."
+        contracts_text = "\n".join(contract_lines) if contract_lines else "None provided in DB - inspect codebase."
 
         acs = state.get("acceptance_criteria", [])
-        acs_text = "\n".join(f"  - AC-{i+1}: {ac}" for i, ac in enumerate(acs)) if acs else "None"
+        acs_lines = []
+        for i, ac in enumerate(acs, start=1):
+            ac_txt = ac.get("text") if isinstance(ac, dict) else str(ac)
+            ac_k = ac.get("ac_key") if isinstance(ac, dict) else f"AC-{i:02d}"
+            acs_lines.append(f"  - {ac_k}: {ac_txt}")
+        acs_text = "\n".join(acs_lines) if acs_lines else "None"
 
         prompt = f"""User Story: {story.get('title', '')}
 Description:
@@ -220,6 +159,10 @@ Analysis summary:
 - Negative scenarios: {len(analysis.get('negative_scenarios', []))}
 - Boundary scenarios: {len(analysis.get('boundary_scenarios', []))}
 """
+        if discovered_routes:
+            routes_summary = "\n".join(f"  - {r['method']} {r['path']} (Source: {r['source_file']})" for r in discovered_routes)
+            prompt += f"\n\n### Discovered Real Implemented Routes in Codebase (STRICTLY USE IF MATCHING STORY):\n{routes_summary}\n"
+
         if codebase_context:
             prompt += f"\n\n### Git Codebase Context (Controllers, Routes, DTOs & Models):\n{codebase_context}\n"
 
@@ -232,8 +175,8 @@ Analysis summary:
 
         print(f"[ServicePlanner] LLM Output Received in {result.latency_ms}ms | Model: {result.model} (is_mock={result.is_mock})")
 
-        # Parse LLM response, fallback to contract extraction
-        service_plan = self._parse_plan(result, contracts, story, base_url, acs)
+        # Parse LLM response, fallback to discovered routes or contract extraction
+        service_plan = self._parse_plan(result, contracts, story, base_url, acs, discovered_routes=discovered_routes)
         impacted = service_plan.get("impacted_services", [])
         print(f"[ServicePlanner] Impacted Microservices: {impacted}")
         for item in service_plan.get("test_plan", []):
@@ -290,170 +233,201 @@ Analysis summary:
     def _synthesize_test_scenarios(self, ep, acs):
         """Synthesize realistic manual test scenarios with actual concrete payloads and responses."""
         method = ep.get("method", "POST").upper()
-        path = ep.get("path", "/api/customers")
+        path = ep.get("path", "/api/resource")
         schema = ep.get("payload_schema") or {}
 
-        # 1. Valid positive scenario
-        sample_positive_payload = {
-            "first_name": "Rahim",
-            "last_name": "Khan",
-            "email": "rahim.khan@example.com",
-            "phone": "+8801712345678",
-            "address": "House 12, Road 5, Dhaka"
-        }
-        # Keep only fields present in schema if defined
+        # Generate realistic sample payload from schema keys
+        sample_positive_payload = {}
         if schema and isinstance(schema, dict):
-            matched_payload = {}
             for k in schema.keys():
-                if k in sample_positive_payload:
-                    matched_payload[k] = sample_positive_payload[k]
-                elif "email" in k.lower():
-                    matched_payload[k] = "rahim.khan@example.com"
-                elif "name" in k.lower():
-                    matched_payload[k] = "Rahim Khan"
-                elif "phone" in k.lower() or "mobile" in k.lower():
-                    matched_payload[k] = "+8801712345678"
-                elif "address" in k.lower():
-                    matched_payload[k] = "123 Main Street"
-                elif "pass" in k.lower():
-                    matched_payload[k] = "SecurePass@123"
+                k_low = k.lower()
+                if "email" in k_low:
+                    sample_positive_payload[k] = "test.user@example.com"
+                elif "prospect_id" in k_low or "prospect" in k_low:
+                    sample_positive_payload[k] = "PR-10029"
+                elif "policy_id" in k_low:
+                    sample_positive_payload[k] = "POL-8821"
+                elif "analysis_type" in k_low or "type" in k_low:
+                    sample_positive_payload[k] = "full"
+                elif "name" in k_low or "title" in k_low:
+                    sample_positive_payload[k] = "Standard Campaign / Prospect Analysis"
+                elif "phone" in k_low or "mobile" in k_low:
+                    sample_positive_payload[k] = "+8801712345678"
+                elif "csv" in k_low or "content" in k_low:
+                    sample_positive_payload[k] = "name,email,age\nAlice,alice@example.com,32"
+                elif "source" in k_low:
+                    sample_positive_payload[k] = "upload.csv"
+                elif "pass" in k_low:
+                    sample_positive_payload[k] = "SecurePass@123"
+                elif "age" in k_low or "count" in k_low or "number" in k_low:
+                    sample_positive_payload[k] = 30
+                elif "score" in k_low:
+                    sample_positive_payload[k] = 85.5
+                elif "channel" in k_low:
+                    sample_positive_payload[k] = "email"
                 else:
-                    matched_payload[k] = "sample_value"
-            sample_positive_payload = matched_payload or sample_positive_payload
+                    sample_positive_payload[k] = f"valid_{k}"
+
+        if not sample_positive_payload and method in ("POST", "PUT", "PATCH"):
+            import re
+            slug = path.strip("/").split("/")[-1] or "resource"
+            slug = re.sub(r"[{}]", "", slug).rstrip("s") or "item"
+            sample_positive_payload = {f"{slug}_id": f"{slug.upper()}-1001", "name": f"Valid {slug.title()}", "status": "ACTIVE"}
 
         scenarios = [
             {
                 "id": "TS-01",
-                "title": f"{201 if method == 'POST' else 200} Success (Valid Payload)",
-                "status_code": 201 if method == "POST" else 200,
-                "status_text": "201 Created" if method == "POST" else "200 OK",
+                "title": f"{200 if method != 'POST' else 200} Success (Valid Request)",
+                "status_code": 200,
+                "status_text": "200 OK",
                 "scenario_type": "POSITIVE",
-                "description": f"Executing {method} {path} with valid fields should successfully create or process the record",
+                "description": f"Executing {method} {path} with valid inputs processes successfully",
                 "actual_payload": sample_positive_payload if method in ("POST", "PUT", "PATCH") else None,
                 "actual_response": {
-                    "id": 101,
-                    **sample_positive_payload,
-                    "created_at": "2026-09-03T12:00:00Z"
-                } if method == "POST" else {"status": "success", "data": sample_positive_payload}
+                    "status": "success",
+                    "data": sample_positive_payload,
+                    "timestamp": "2026-09-04T12:00:00Z"
+                }
             }
         ]
 
-        # 2. Negative validation scenario 1: Invalid email
-        if any("email" in k.lower() for k in sample_positive_payload.keys()):
-            invalid_email_payload = dict(sample_positive_payload)
-            for k in invalid_email_payload.keys():
-                if "email" in k.lower():
-                    invalid_email_payload[k] = "invalid-email-format"
+        # 2. Negative scenario: Invalid or non-existent identifier
+        invalid_id_payload = dict(sample_positive_payload)
+        id_key = next((k for k in invalid_id_payload.keys() if "id" in k.lower()), None)
+        if id_key:
+            invalid_id_payload[id_key] = "NON_EXISTENT_ID_999"
             scenarios.append({
                 "id": "TS-02",
-                "title": "400 Bad Request (Invalid Email)",
-                "status_code": 400,
-                "status_text": "400 Bad Request",
+                "title": "404 Not Found (Invalid Identifier)",
+                "status_code": 404,
+                "status_text": "404 Not Found",
                 "scenario_type": "NEGATIVE",
-                "description": "Validation failure when an invalid email format is supplied",
-                "actual_payload": invalid_email_payload,
+                "description": f"Submitting a non-existent {id_key} returns a 404 error response",
+                "actual_payload": invalid_id_payload,
                 "actual_response": {
-                    "timestamp": "2026-09-03T12:00:01Z",
-                    "status": 400,
-                    "error": "Bad Request",
-                    "message": "Validation failed for field 'email': must be a well-formed email address",
-                    "path": path
+                    "detail": f"{id_key} not found"
                 }
             })
 
-        # 3. Negative validation scenario 2: Missing required field
-        missing_phone_payload = dict(sample_positive_payload)
-        phone_key = next((k for k in missing_phone_payload.keys() if "phone" in k.lower() or "mobile" in k.lower()), None)
-        if phone_key:
-            missing_phone_payload.pop(phone_key, None)
-            scenarios.append({
-                "id": "TS-03",
-                "title": "400 Bad Request (Missing Phone)",
-                "status_code": 400,
-                "status_text": "400 Bad Request",
-                "scenario_type": "NEGATIVE",
-                "description": "Validation failure when mandatory phone number field is omitted",
-                "actual_payload": missing_phone_payload,
-                "actual_response": {
-                    "timestamp": "2026-09-03T12:00:02Z",
-                    "status": 400,
-                    "error": "Bad Request",
-                    "message": f"Validation failed: field '{phone_key}' is required and cannot be blank",
-                    "path": path
-                }
-            })
-
-        # 4. Conflict / Duplicate Scenario (409)
+        # 3. Validation failure scenario (400 / 422)
         scenarios.append({
             "id": f"TS-0{len(scenarios)+1}",
-            "title": "409 Conflict (Duplicate Record)",
-            "status_code": 409,
-            "status_text": "409 Conflict",
+            "title": "422 Unprocessable Entity (Missing Mandatory Fields)",
+            "status_code": 422,
+            "status_text": "422 Unprocessable Entity",
             "scenario_type": "NEGATIVE",
-            "description": "Attempting to create duplicate record with an already registered unique identifier",
-            "actual_payload": sample_positive_payload if method in ("POST", "PUT", "PATCH") else None,
+            "description": f"Omission of required parameters in {method} {path} is rejected by schema validator",
+            "actual_payload": {},
             "actual_response": {
-                "timestamp": "2026-09-03T12:00:03Z",
-                "status": 409,
-                "error": "Conflict",
-                "message": "A customer with the given email address already exists in the system",
-                "path": path
+                "detail": [{"loc": ["body"], "msg": "field required", "type": "value_error.missing"}]
             }
         })
 
         return scenarios
 
-    def _parse_plan(self, result, contracts, story=None, base_url="http://localhost:8080", acs=None):
-        """Parse Gemini's service plan. Fallback to contract-derived plan."""
+    def _parse_plan(self, result, contracts, story=None, base_url="http://localhost:8080", acs=None, discovered_routes=None):
+        """Parse Gemini's service plan with strict grounding against real codebase routes."""
+        discovered_routes = discovered_routes or []
+        parsed = None
+
         if not result.is_mock:
             try:
                 parsed = json.loads(result.text)
-                if isinstance(parsed, dict) and ("impacted_services" in parsed or "extracted_apis" in parsed):
-                    parsed["model"] = result.model
-                    parsed["is_mock"] = result.is_mock
-                    if not parsed.get("impacted_services"):
-                        parsed["impacted_services"] = ["CoreService"]
-                    return parsed
             except (json.JSONDecodeError, TypeError):
-                print("[ServicePlanner] Could not parse LLM JSON, using fallback plan.")
+                print("[ServicePlanner] Could not parse LLM JSON, using codebase route grounding.")
+                parsed = None
 
-        # Fallback: derive from contracts or story
-        services = list({c.get("service", "unknown") for c in contracts}) or ["CoreService"]
+        if isinstance(parsed, dict) and ("impacted_services" in parsed or "extracted_apis" in parsed):
+            extracted = parsed.get("extracted_apis") or []
+            
+            # Verify extracted routes are not generic placeholders if real routes exist
+            if discovered_routes and extracted:
+                valid_extracted = []
+                story_words = set(re.findall(r"\w+", f"{(story or {}).get('title', '')} {(story or {}).get('description', '')}".lower()))
+                
+                for ep in extracted:
+                    ep_path = (ep.get("path") or ep.get("url") or "").lower()
+                    # If endpoint is placeholder, find best matching discovered route
+                    if any(ph in ep_path for ph in ("/api/resource", "/api/endpoint", "example.com", "server-base-url")) or not ep_path:
+                        # Score discovered routes based on story word overlap
+                        best_route = None
+                        best_score = -1
+                        for r in discovered_routes:
+                            r_words = set(re.findall(r"\w+", r["path"].lower()))
+                            score = len(story_words.intersection(r_words))
+                            if r["method"].upper() == ep.get("method", "GET").upper():
+                                score += 2
+                            if score > best_score:
+                                best_score = score
+                                best_route = r
+                        if best_route:
+                            ep["path"] = best_route["path"]
+                            ep["method"] = best_route["method"]
+                            ep["url"] = f"{base_url.rstrip('/')}/{best_route['path'].lstrip('/')}"
+                            ep["source_file"] = best_route.get("source_file", ep.get("source_file"))
+                    valid_extracted.append(ep)
+                parsed["extracted_apis"] = valid_extracted
+
+            parsed["model"] = result.model
+            parsed["is_mock"] = result.is_mock
+            if not parsed.get("impacted_services"):
+                parsed["impacted_services"] = ["CoreService"]
+            return parsed
+
+        # Fallback: ground strictly in discovered routes from codebase or explicit contracts
+        story_text = f"{(story or {}).get('title', '')} {(story or {}).get('description', '')}".lower()
+        story_words = set(re.findall(r"\w+", story_text))
+        matched_routes = []
+
+        if discovered_routes:
+            for r in discovered_routes:
+                r_words = set(re.findall(r"\w+", r["path"].lower()))
+                overlap = len(story_words.intersection(r_words))
+                if overlap > 0:
+                    matched_routes.append((overlap, r))
+            matched_routes.sort(key=lambda x: x[0], reverse=True)
+
+        selected_routes = [r[1] for r in matched_routes[:4]] if matched_routes else discovered_routes[:3]
+
+        if not selected_routes and contracts:
+            selected_routes = contracts
+
+        if not selected_routes:
+            clean_name = "".join(c for c in (story or {}).get("title", "resource") if c.isalnum() or c in " -_").strip()
+            endpoint_slug = clean_name.lower().replace(" ", "-") or "api"
+            selected_routes = [{"method": "POST" if "create" in story_text else "GET", "path": f"/{endpoint_slug}"}]
+
+        services = ["CoreService"]
         endpoints_by_service = {}
         extracted_apis = []
 
-        for c in contracts:
-            svc = c.get("service", "CoreService")
-            method = c.get("method", "GET").upper()
-            rel_path = c.get("path", "/api/customers")
+        for r in selected_routes:
+            svc = r.get("service", "CoreService")
+            method = r.get("method", "GET").upper()
+            rel_path = r.get("path", "/api")
             full_url = f"{base_url.rstrip('/')}/{rel_path.lstrip('/')}"
             endpoints_by_service.setdefault(svc, []).append({
                 "method": method,
                 "path": rel_path,
                 "test_priority": "high" if method in ("POST", "PUT", "DELETE", "PATCH") else "medium",
             })
+            slug = rel_path.strip("/").split("/")[-1] or "item"
+            slug = re.sub(r"[{}]", "", slug).rstrip("s") or "item"
             ep_obj = {
                 "method": method,
                 "url": full_url,
                 "path": rel_path,
                 "purpose": f"Perform {method} operation on {rel_path}",
-                "payload_schema": c.get("request_schema") or {
-                    "first_name": "string (required, 2-50 chars)",
-                    "last_name": "string (required, 2-50 chars)",
-                    "email": "string (required, valid email format)",
-                    "phone": "string (required, regex ^\\+?\\d{7,15}$)",
-                    "address": "string (optional)"
-                } if method in ("POST", "PUT", "PATCH") else None,
-                "response_schema": c.get("response_schema") or {
-                    "status_code": 201 if method == "POST" else 200,
+                "payload_schema": r.get("request_schema") or ({
+                    f"{slug}_id": f"string (required, {slug} identifier)",
+                    "name": "string (required)",
+                    "status": "string (optional: ACTIVE, PENDING)"
+                } if method in ("POST", "PUT", "PATCH") else None),
+                "response_schema": r.get("response_schema") or {
+                    "status_code": 200,
                     "body": {
-                        "id": "number",
-                        "first_name": "string",
-                        "last_name": "string",
-                        "email": "string",
-                        "phone": "string",
-                        "address": "string",
-                        "created_at": "string"
+                        "status": "success",
+                        "data": "object"
                     }
                 }
             }

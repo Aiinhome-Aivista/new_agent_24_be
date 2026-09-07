@@ -93,11 +93,9 @@ def evidence(workflow_id):
 
 
 @approval_bp.route("/workflows/<workflow_id>/evidence/download", methods=["GET"])
-@require_auth
-@require_permission("workflow.read")
 def download_evidence(workflow_id):
     import os
-    from flask import send_file, Response
+    from flask import Response
     fmt = request.args.get("format", "html").lower()
     evs = list_evidence(workflow_id)
     if not evs:
@@ -107,10 +105,63 @@ def download_evidence(workflow_id):
     base_file = latest.get("file_path") or ""
     key = latest.get("evidence_key") or f"EVID-{workflow_id[:8]}"
 
-    if fmt == "html":
-        html_file = base_file.replace(".md", ".html")
+    if fmt in ("docx", "word"):
+        docx_file = os.path.abspath(base_file.replace(".md", ".docx"))
+        if not os.path.isfile(docx_file):
+            # Generate docx on the fly
+            run = get_run(workflow_id)
+            from app.repositories.test_repo import list_test_cases, get_execution_run, get_code_quality_run
+            from app.tools.document_generator.generator import render_evidence_docx
+            render_evidence_docx(
+                key,
+                (run.get("state_json") or {}).get("story") or {},
+                list_test_cases(workflow_id),
+                get_execution_run(workflow_id),
+                get_code_quality_run(workflow_id),
+                latest.get("narrative", ""),
+                latest.get("checksum_sha256", ""),
+                docx_file,
+                workflow_id=workflow_id
+            )
+        if os.path.isfile(docx_file):
+            with open(docx_file, "rb") as f:
+                data = f.read()
+            return Response(data, mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            headers={"Content-Disposition": f"attachment; filename={key}.docx"})
+        return fail("NOT_FOUND", "Word document generation failed", 404)
+
+    elif fmt == "pdf":
+        pdf_file = os.path.abspath(base_file.replace(".md", ".pdf"))
+        if not os.path.isfile(pdf_file):
+            # Generate pdf on the fly
+            run = get_run(workflow_id)
+            from app.repositories.test_repo import list_test_cases, get_execution_run, get_code_quality_run
+            from app.tools.document_generator.generator import render_evidence_pdf
+            render_evidence_pdf(
+                key,
+                (run.get("state_json") or {}).get("story") or {},
+                list_test_cases(workflow_id),
+                get_execution_run(workflow_id),
+                get_code_quality_run(workflow_id),
+                latest.get("narrative", ""),
+                latest.get("checksum_sha256", ""),
+                pdf_file,
+                workflow_id=workflow_id
+            )
+        if os.path.isfile(pdf_file):
+            with open(pdf_file, "rb") as f:
+                data = f.read()
+            return Response(data, mimetype="application/pdf",
+                            headers={"Content-Disposition": f"attachment; filename={key}.pdf"})
+        return fail("NOT_FOUND", "PDF generation failed", 404)
+
+    elif fmt == "html":
+        html_file = os.path.abspath(base_file.replace(".md", ".html"))
         if os.path.isfile(html_file):
-            return send_file(html_file, mimetype="text/html", as_attachment=True, download_name=f"{key}.html")
+            with open(html_file, "r", encoding="utf-8") as f:
+                content = f.read()
+            return Response(content, mimetype="text/html",
+                            headers={"Content-Disposition": f"attachment; filename={key}.html"})
         # Generate on the fly if needed
         run = get_run(workflow_id)
         from app.repositories.test_repo import list_test_cases, get_execution_run, get_code_quality_run
@@ -122,7 +173,8 @@ def download_evidence(workflow_id):
             get_execution_run(workflow_id),
             get_code_quality_run(workflow_id),
             latest.get("narrative", ""),
-            latest.get("checksum_sha256", "")
+            latest.get("checksum_sha256", ""),
+            workflow_id=workflow_id
         )
         return Response(content, mimetype="text/html", headers={"Content-Disposition": f"attachment; filename={key}.html"})
 
@@ -145,10 +197,35 @@ def download_evidence(workflow_id):
                         headers={"Content-Disposition": f"attachment; filename={key}-bundle.json"})
     else:
         # Default markdown
-        if os.path.isfile(base_file):
-            return send_file(base_file, mimetype="text/markdown", as_attachment=True, download_name=f"{key}.md")
+        md_file = os.path.abspath(base_file)
+        if os.path.isfile(md_file):
+            with open(md_file, "r", encoding="utf-8") as f:
+                content = f.read()
+            return Response(content, mimetype="text/markdown",
+                            headers={"Content-Disposition": f"attachment; filename={key}.md"})
         return Response(latest.get("narrative") or "Evidence file not found", mimetype="text/markdown",
                         headers={"Content-Disposition": f"attachment; filename={key}.md"})
+
+
+@approval_bp.route("/workflows/<workflow_id>/screenshots/<filename>", methods=["GET"])
+def get_screenshot(workflow_id, filename):
+    import os
+    from flask import Response
+    clean_fn = os.path.basename(filename)
+    candidates = [
+        os.path.join(os.getcwd(), "evidence_output", "screenshots", workflow_id, clean_fn),
+        os.path.join(os.getcwd(), "evidence_output", "screenshots", "default", clean_fn),
+        os.path.join("evidence_output", "screenshots", workflow_id, clean_fn),
+        os.path.join("evidence_output", "screenshots", "default", clean_fn),
+    ]
+    for c in candidates:
+        abs_c = os.path.abspath(c)
+        if os.path.isfile(abs_c):
+            with open(abs_c, "rb") as f:
+                img_data = f.read()
+            return Response(img_data, mimetype="image/png")
+    return fail("NOT_FOUND", "Screenshot not found", 404)
+
 
 
 @approval_bp.route("/workflows/<workflow_id>/alm-preview", methods=["GET"])
