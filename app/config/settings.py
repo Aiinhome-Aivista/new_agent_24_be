@@ -65,14 +65,35 @@ class Config:
     UPLOAD_PATH = os.getenv("UPLOAD_PATH", "data/uploads")
     EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
+    # ---- Global Flags ----
+    CLOUD_PROVIDER = os.getenv("CLOUD_PROVIDER", "DEFAULT").upper()
+    DB_PROVIDER = os.getenv("DB_PROVIDER", "DEFAULT").upper()
+
     # Storage & AWS S3
-    DEPLOY = _bool("deploy", "false")
     AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "")
     AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
     AWS_DEFAULT_REGION = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
     AWS_S3_BUCKET_NAME = os.getenv("AWS_S3_BUCKET_NAME", "")
     AWS_S3_BASE_FOLDER = os.getenv("AWS_S3_BASE_FOLDER", "Agents_Doc")
     AWS_S3_AGENT_FOLDER = os.getenv("AWS_S3_AGENT_FOLDER", "Agent_24")
+
+    # Storage & Azure Blob
+    AZURE_STORAGE_CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
+    AZURE_CONTAINER_NAME = os.getenv("AZURE_CONTAINER_NAME", "")
+
+    # AWS RDS (MySQL)
+    AWS_RDS_HOST = os.getenv("AWS_RDS_HOST", "")
+    AWS_RDS_PORT = int(os.getenv("AWS_RDS_PORT", "3306"))
+    AWS_RDS_DATABASE = os.getenv("AWS_RDS_DATABASE", "")
+    AWS_RDS_USER = os.getenv("AWS_RDS_USER", "")
+    AWS_RDS_PASSWORD = os.getenv("AWS_RDS_PASSWORD", "")
+
+    # Azure Database (MySQL)
+    AZURE_DB_HOST = os.getenv("AZURE_DB_HOST", "")
+    AZURE_DB_PORT = int(os.getenv("AZURE_DB_PORT", "3306"))
+    AZURE_DB_DATABASE = os.getenv("AZURE_DB_DATABASE", "")
+    AZURE_DB_USER = os.getenv("AZURE_DB_USER", "")
+    AZURE_DB_PASSWORD = os.getenv("AZURE_DB_PASSWORD", "")
 
     # RAG Chunking & Retrieval Parameters
     CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1000"))
