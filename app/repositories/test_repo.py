@@ -384,6 +384,21 @@ def list_executions(workflow_id, limit=20):
                     res["assertions"] = json.loads(res["assertions"])
                 except Exception:
                     res["assertions"] = []
+            if isinstance(res.get("req_headers"), str):
+                try:
+                    res["req_headers"] = json.loads(res["req_headers"])
+                except Exception:
+                    pass
+            if isinstance(res.get("resp_headers"), str):
+                try:
+                    res["resp_headers"] = json.loads(res["resp_headers"])
+                except Exception:
+                    pass
+            # Ensure method/url exist as top-level fields
+            if not res.get("method"):
+                res["method"] = res.get("req_method") or "GET"
+            if not res.get("url"):
+                res["url"] = res.get("req_url") or ""
         r["results"] = results or []
     return runs
 
@@ -481,6 +496,11 @@ def get_execution_run(identifier):
                 pass
         if not res.get("test_key"):
             res["test_key"] = res.get("tc_test_key") or f"TC-{res.get('id')}"
+        # Provide top-level method/url fields that frontend expects (from api_requests join)
+        if not res.get("method"):
+            res["method"] = res.get("req_method") or "GET"
+        if not res.get("url"):
+            res["url"] = res.get("req_url") or ""
 
     run["results"] = results or []
     return run

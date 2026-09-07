@@ -4,6 +4,8 @@ Postman / Bruno collections, or custom endpoints without requiring repository ch
 """
 import uuid as _uuid
 import json
+import time
+import requests
 from flask import Blueprint, request
 from app.errors.handlers import ok, fail
 from app.auth.decorators import require_auth
@@ -227,3 +229,76 @@ def parse_collection():
         "endpoints": endpoints,
         "total": len(endpoints)
     })
+
+
+@api_execution_bp.route("/api-executor/execute-single", methods=["POST"])
+@require_auth
+def execute_single_test():
+    """Executes an ad-hoc single HTTP request and returns immediate telemetry and extracted tokens."""
+    body = request.get_json(silent=True) or {}
+    base_url = (body.get("base_url") or "").strip()
+    endpoint = body.get("endpoint") or {}
+    if not endpoint:
+        endpoint = {
+            "method": body.get("method", "GET"),
+            "path": body.get("url") or body.get("path", "/"),
+            "headers": body.get("headers") or {},
+            "params": body.get("params") or {},
+            "body": body.get("body"),
+            "expected_status_code": body.get("expected_status_code", 200),
+            "expected_body_contains": body.get("expected_body_contains"),
+            "assertions": body.get("assertions") or [],
+        }
+
+    raw_url = endpoint.get("path") or endpoint.get("url") or "/"
+    clean_url = str(raw_url).strip()
+    if clean_url.startswith("/http://") or clean_url.startswith("/https://"):
+        clean_url = clean_url[1:]
+    endpoint["path"] = clean_url
+
+    if not clean_url.startswith("http://") and not clean_url.startswith("https://") and not base_url:
+        return fail("VALIDATION_ERROR", "Target base_url or full URL is required")
+
+    runner = HttpRunner()
+    run_result = runner.run(endpoints=[endpoint], base_url=base_url or "")
+    if not run_result.results:
+        return fail("EXECUTION_ERROR", "No execution result returned from runner")
+
+    res = run_result.results[0]
+    # Check if any tokens or IDs were returned in response
+    extracted_tokens = {}
+    try:
+        resp_body = res.get("response_body")
+        if resp_body:
+            parsed = json.loads(resp_body)
+            if isinstance(parsed, dict):
+                for k in ("access_token", "token", "token_type", "jwt", "id"):
+                    if k in parsed:
+                        extracted_tokens[k] = parsed[k]
+                if "user" in parsed and isinstance(parsed["user"], dict):
+                    extracted_tokens["user"] = parsed["user"]
+    except Exception:
+        pass
+
+    return ok({
+        "result": res,
+        "extracted_tokens": extracted_tokens,
+    })
+
+
+@api_execution_bp.route("/api-executor/ping", methods=["POST"])
+@require_auth
+def ping_target():
+    """Checks if a target host/base_url is reachable and returns latency."""
+    body = request.get_json(silent=True) or {}
+    target_url = (body.get("url") or "").strip()
+    if not target_url:
+        return fail("VALIDATION_ERROR", "Target URL required")
+    try:
+        t0 = time.perf_counter()
+        resp = requests.get(target_url, timeout=4, allow_redirects=True)
+        latency = int((time.perf_counter() - t0) * 1000)
+        return ok({"reachable": True, "status_code": resp.status_code, "latency_ms": latency})
+    except Exception as e:
+        return ok({"reachable": False, "error": str(e)})
+

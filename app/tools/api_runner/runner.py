@@ -66,6 +66,26 @@ class HttpRunner:
                     "assertions": res_spec.get("assertions") or ["Status code matches expected"],
                 })
 
+        env_vars = {
+            "baseUrl": base_url,
+            "base_url": base_url,
+        }
+
+        def _substitute_vars(val):
+            if not val or not env_vars:
+                return val
+            if isinstance(val, str):
+                for k, v in env_vars.items():
+                    target = f"{{{{{k}}}}}"
+                    if target in val:
+                        val = val.replace(target, str(v))
+                return val
+            elif isinstance(val, dict):
+                return {k: _substitute_vars(v) for k, v in val.items()}
+            elif isinstance(val, list):
+                return [_substitute_vars(v) for v in val]
+            return val
+
         results = []
         for idx, ep in enumerate(items):
             test_case_id = ep.get("test_case_id") or ep.get("id")
@@ -79,30 +99,40 @@ class HttpRunner:
             expected_contains = ep.get("expected_body_contains")
             assertions_defined = ep.get("assertions") or []
 
-            # Format full URL
-            if path.startswith("http://") or path.startswith("https://"):
-                target_url = path
-            else:
-                target_url = f"{base_url}{path if path.startswith('/') else '/' + path}"
+            # Clean and format path/URL
+            clean_path = path.strip()
+            if clean_path.startswith("/http://") or clean_path.startswith("/https://"):
+                clean_path = clean_path[1:]
 
-            # Ensure headers is dict
+            # Apply runtime variable replacements (e.g. {{token}}, {{baseUrl}})
+            clean_path = _substitute_vars(clean_path)
+
+            if clean_path.startswith("http://") or clean_path.startswith("https://"):
+                target_url = clean_path
+            else:
+                target_url = f"{base_url}{clean_path if clean_path.startswith('/') else '/' + clean_path}"
+
+            # Ensure headers is dict and substitute variables
             if isinstance(headers, str):
                 try:
                     headers = json.loads(headers)
                 except Exception:
                     headers = {}
+            headers = _substitute_vars(headers)
+            params = _substitute_vars(params)
 
             # Prepare body payload
             req_data = None
             req_json = None
             if body is not None:
                 if isinstance(body, (dict, list)):
-                    req_json = body
+                    req_json = _substitute_vars(body)
                 elif isinstance(body, str):
+                    substituted_body = _substitute_vars(body)
                     try:
-                        req_json = json.loads(body)
+                        req_json = json.loads(substituted_body)
                     except Exception:
-                        req_data = body
+                        req_data = substituted_body
                 else:
                     req_data = str(body)
 
@@ -128,6 +158,26 @@ class HttpRunner:
                 resp_headers = dict(response.headers)
                 # Limit stored body size to 100KB to protect database
                 resp_body = response.text[:102400] if response.text else ""
+
+                # Auto-extract auth tokens and IDs into env_vars for chained requests
+                if 200 <= status_code < 300 and resp_body:
+                    try:
+                        resp_json = response.json()
+                        if isinstance(resp_json, dict):
+                            for token_key in ("access_token", "token", "jwt", "id_token"):
+                                if token_key in resp_json and isinstance(resp_json[token_key], str):
+                                    token_val = resp_json[token_key]
+                                    env_vars["token"] = token_val
+                                    env_vars["access_token"] = token_val
+                                    break
+                            if "id" in resp_json:
+                                env_vars["id"] = resp_json["id"]
+                            if "user" in resp_json and isinstance(resp_json["user"], dict):
+                                if "id" in resp_json["user"]:
+                                    env_vars["userId"] = resp_json["user"]["id"]
+                                    env_vars["user_id"] = resp_json["user"]["id"]
+                    except Exception:
+                        pass
             except requests.exceptions.RequestException as ex:
                 duration_ms = int((time.perf_counter() - t0) * 1000)
                 error_message = str(ex)
@@ -163,7 +213,6 @@ class HttpRunner:
                 # 3. User-defined assertions
                 for a in assertions_defined:
                     a_name = a if isinstance(a, str) else str(a.get("name", a))
-                    # If we don't have a specific failing condition, correlate with status pass
                     run_assertions.append({
                         "name": a_name,
                         "passed": status_passed,
@@ -178,6 +227,12 @@ class HttpRunner:
                 "passed": overall_passed,
                 "duration_ms": duration_ms,
                 "assertions": run_assertions,
+                "method": method,
+                "url": target_url,
+                "req_headers": headers,
+                "req_body": json.dumps(req_json) if req_json is not None else req_data,
+                "resp_headers": resp_headers,
+                "resp_body": resp_body,
                 "request": {
                     "method": method,
                     "url": target_url,
