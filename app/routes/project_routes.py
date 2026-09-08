@@ -262,7 +262,6 @@ def add_story():
 
 
 @project_bp.route("/stories/parse-document", methods=["POST"])
-@require_auth
 def parse_story_document():
     """
     Parses an uploaded user story document (.docx, .pdf, .md, .txt, .json)
