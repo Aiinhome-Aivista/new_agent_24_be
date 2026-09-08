@@ -17,6 +17,7 @@ from app.routes.agent_routes import agent_bp
 from app.routes.governance_routes import governance_bp
 from app.routes.dashboard_routes import dashboard_bp
 from app.routes.api_execution_routes import api_execution_bp
+from app.routes.jira_routes import jira_bp
 
 API_PREFIX = "/api/v1"
 
@@ -34,7 +35,7 @@ def create_app(config=Config):
     check_connection()
 
     for bp in (health_bp, auth_bp, project_bp, workflow_bp, test_bp,
-               approval_bp, agent_bp, governance_bp, dashboard_bp, api_execution_bp):
+               approval_bp, agent_bp, governance_bp, dashboard_bp, api_execution_bp, jira_bp):
         app.register_blueprint(bp, url_prefix=API_PREFIX)
 
     return app

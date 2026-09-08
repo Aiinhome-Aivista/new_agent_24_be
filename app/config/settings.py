@@ -105,3 +105,9 @@ class Config:
     # Git workspace
     GIT_WORKSPACE_ROOT = os.getenv("GIT_WORKSPACE_ROOT", "./workspaces")
 
+    # Jira Integration
+    JIRA_BASE_URL = os.getenv("JIRA_BASE_URL", "")
+    JIRA_USER_EMAIL = os.getenv("JIRA_USER_EMAIL", "")
+    JIRA_API_TOKEN = os.getenv("JIRA_API_TOKEN", "")
+    JIRA_PROJECT_KEY = os.getenv("JIRA_PROJECT_KEY", "")
+
