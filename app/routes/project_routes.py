@@ -261,6 +261,33 @@ def add_story():
     }, "Story created successfully", 201)
 
 
+@project_bp.route("/stories/parse-document", methods=["POST"])
+@require_auth
+def parse_story_document():
+    """
+    Parses an uploaded user story document (.docx, .pdf, .md, .txt, .json)
+    and extracts story title, key, sprint, narrative, and structured acceptance criteria.
+    """
+    if "file" not in request.files:
+        return fail("VALIDATION_ERROR", "No file uploaded. Please provide a document.")
+
+    file = request.files["file"]
+    filename = file.filename or "story_document"
+    if not filename.strip():
+        return fail("VALIDATION_ERROR", "Invalid file name.")
+
+    try:
+        from app.tools.story_extractor.extractor import extract_story_from_file
+        file_bytes = file.read()
+        if not file_bytes:
+            return fail("VALIDATION_ERROR", "Uploaded file is empty.")
+
+        parsed_data = extract_story_from_file(file_bytes, filename=filename, use_llm=True)
+        return ok(parsed_data, f"Document '{filename}' parsed successfully ({parsed_data.get('extracted_count', 0)} ACs extracted).")
+    except Exception as e:
+        return fail("PARSE_ERROR", f"Failed to parse document: {str(e)}", 500)
+
+
 @project_bp.route("/stories/<uuid>/acceptance-criteria", methods=["POST"])
 @require_auth
 @require_permission("story.write")
