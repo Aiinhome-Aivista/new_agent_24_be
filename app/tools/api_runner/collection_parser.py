@@ -121,30 +121,60 @@ def parse_postman_collection(collection_data):
                             ue[param["key"]] = param.get("value", "")
                     body_content = json.dumps(ue) if ue else None
 
-            # Expected status code
+            # Expected status code and response examples
             expected_status = 200
+            sample_response = None
+            response_examples = []
             responses = item.get("response", [])
             if responses and isinstance(responses, list):
+                for resp in responses:
+                    if isinstance(resp, dict):
+                        resp_code = resp.get("code")
+                        resp_body = resp.get("body")
+                        resp_name = resp.get("name", "")
+                        if resp_body:
+                            response_examples.append({
+                                "status_code": resp_code,
+                                "name": resp_name,
+                                "body": resp_body
+                            })
                 first_resp = responses[0]
-                if isinstance(first_resp, dict) and first_resp.get("code"):
-                    try:
-                        expected_status = int(first_resp["code"])
-                    except Exception:
-                        pass
+                if isinstance(first_resp, dict):
+                    if first_resp.get("code"):
+                        try:
+                            expected_status = int(first_resp["code"])
+                        except Exception:
+                            pass
+                    if first_resp.get("body"):
+                        sample_response = first_resp.get("body")
 
             # Assertions from test scripts if available
-            assertions = [f"Status code is {expected_status}"]
+            test_assertions = []
             for event in item.get("event", []):
                 if isinstance(event, dict) and event.get("listen") == "test":
                     script = event.get("script", {})
                     exec_lines = script.get("exec", [])
                     if isinstance(exec_lines, list):
                         for line in exec_lines:
+                            # Extract expected status code from test script if not already set by explicit response example
+                            status_code_match = re.search(r'pm\.response\.(?:to\.)?(?:have\.)?status\(\s*(\d{3})\s*\)', line)
+                            if not status_code_match:
+                                status_code_match = re.search(r'pm\.expect\s*\(\s*pm\.response\.code\s*\)\.to\.(?:eql|equal)\s*\(\s*(\d{3})\s*\)', line)
+                            if not status_code_match:
+                                status_code_match = re.search(r'Status\s+is\s+(\d{3})', line, re.IGNORECASE)
+                            if status_code_match and (not responses or expected_status == 200):
+                                try:
+                                    expected_status = int(status_code_match.group(1))
+                                except Exception:
+                                    pass
+
                             match = re.search(r'pm\.test\(\s*["\']([^"\']+)["\']', line)
                             if match:
                                 test_desc = match.group(1)
-                                if test_desc not in assertions:
-                                    assertions.append(test_desc)
+                                if test_desc not in test_assertions:
+                                    test_assertions.append(test_desc)
+
+            assertions = [f"Status code is {expected_status}"] + [a for a in test_assertions if not a.startswith("Status code is")]
 
             endpoints.append({
                 "test_key": full_name,
@@ -153,6 +183,10 @@ def parse_postman_collection(collection_data):
                 "headers": headers,
                 "params": query_params,
                 "body": body_content,
+                "sample_request": body_content,
+                "sample_response": sample_response,
+                "response_example": sample_response,
+                "response_examples": response_examples,
                 "expected_status_code": expected_status,
                 "assertions": assertions,
             })

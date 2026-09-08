@@ -1,3 +1,6 @@
+import os
+import json
+import re
 import uuid as _uuid
 # pyrefly: ignore [missing-import]
 from flask import Blueprint, request, g
@@ -61,21 +64,73 @@ def start_workflow():
             ]
         acs = extracted
 
-    contracts = query("""SELECT c.method, c.path, s.name AS service FROM api_contracts c
-                         JOIN services s ON s.id=c.service_id WHERE s.project_id=%s""",
-                      (story["project_id"],))
+    # 1. Fetch contracts from DB or Project's Uploaded Postman Collection
+    contracts = []
+    
+    # Check if project has an uploaded Postman collection document
+    collection_doc = query("""
+        SELECT kd.id, kd.source, kd.title FROM knowledge_documents kd
+        WHERE kd.project_id = %s AND (kd.doc_type IN ('postman_collection', 'api_contract', 'postman', 'openapi') OR kd.title LIKE '%.json')
+        ORDER BY kd.created_at DESC LIMIT 1
+    """, (story["project_id"],), fetchone=True)
 
-    # If no explicit contracts in DB, extract endpoints from ACs or derive clean REST endpoints
+    if collection_doc:
+        from app.tools.api_runner.collection_parser import parse_postman_collection
+        col_content = None
+        source_path = collection_doc.get("source")
+        if source_path and os.path.isfile(source_path):
+            try:
+                with open(source_path, "r", encoding="utf-8") as f:
+                    col_content = json.load(f)
+            except Exception:
+                pass
+        
+        if not col_content:
+            chunks = query("SELECT content FROM knowledge_chunks WHERE document_id=%s ORDER BY chunk_index",
+                           (collection_doc["id"],))
+            if chunks:
+                try:
+                    col_content = json.loads("".join([c["content"] for c in chunks]))
+                except Exception:
+                    pass
+
+        if col_content:
+            parsed_endpoints = parse_postman_collection(col_content)
+            service_name = col_content.get("info", {}).get("name", "ApiService")
+            for ep in parsed_endpoints:
+                contracts.append({
+                    "service": service_name,
+                    "method": ep.get("method", "GET").upper(),
+                    "path": ep.get("path", "/"),
+                    "headers": ep.get("headers", {}),
+                    "sample_request": ep.get("body"),
+                    "sample_response": ep.get("response_example"),
+                    "expected_status_code": ep.get("expected_status_code", 200)
+                })
+
+    if not contracts:
+        db_contracts = query("""SELECT c.method, c.path, c.request_schema, c.response_schema, s.name AS service 
+                                FROM api_contracts c
+                                JOIN services s ON s.id=c.service_id WHERE s.project_id=%s""",
+                             (story["project_id"],))
+        if db_contracts:
+            for c in db_contracts:
+                contracts.append({
+                    "service": c.get("service", "Service"),
+                    "method": c.get("method", "GET").upper(),
+                    "path": c.get("path", "/"),
+                    "sample_request": c.get("request_schema"),
+                    "sample_response": c.get("response_schema")
+                })
+
+    # If no explicit contracts in DB or collection, extract endpoints from ACs or derive clean REST endpoints
     if not contracts:
         story_text = f"{story.get('title', '')} {story.get('description', '')}".lower()
         ac_combined = " ".join(a.get("text", "") for a in acs)
         all_text = f"{story_text} {ac_combined.lower()}"
 
-        # 1. Look for explicit endpoints in Acceptance Criteria (e.g. POST /api/auth/change-password)
-        import re
         extracted_endpoints = re.findall(r'(GET|POST|PUT|DELETE|PATCH)\s+([/a-zA-Z0-9_\-\/{}\.]+)', ac_combined, re.IGNORECASE)
         if extracted_endpoints:
-            contracts = []
             service_name = "AuthService" if any(k in all_text for k in ("auth", "password", "jwt", "login")) else "CoreService"
             for m, p in extracted_endpoints:
                 clean_p = p.rstrip('`,.')
@@ -87,13 +142,11 @@ def start_workflow():
                     })
 
         if not contracts and not (project or {}).get("git_repo_url"):
-            # Only generate fallback endpoint if no git repo is connected
             clean_name = "".join(c for c in story.get("title", "resource") if c.isalnum() or c in " -_").strip()
             endpoint_slug = clean_name.lower().replace(" ", "-") or "resources"
             if not endpoint_slug.endswith("s"):
                 endpoint_slug += "s"
             service_name = (project or {}).get("name", "CoreService")
-            # Determine main method from story title
             main_method = "POST" if any(k in story_text for k in ("create", "add", "register", "insert", "new")) else "GET"
             contracts = [
                 {"service": service_name, "method": main_method, "path": f"/api/{endpoint_slug}"}
@@ -140,7 +193,6 @@ def start_workflow():
     """, (story["project_id"],), fetchone=True)
     if collection_doc:
         # Reconstruct collection from stored chunks
-        import os, json as _json
         chunks = query("SELECT content FROM knowledge_chunks WHERE document_id=%s ORDER BY chunk_index",
                        (collection_doc["id"],))
         if chunks:

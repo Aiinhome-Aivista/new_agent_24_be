@@ -4,6 +4,7 @@ Generates full production test code for all approved test cases, writes test fil
 project's workspace/repository, and produces an auditable Code Log.
 """
 import os
+import json
 import time
 import datetime
 from pathlib import Path
@@ -12,20 +13,43 @@ from app.llm.model_router.router import get_router
 from app.repositories.test_repo import list_test_cases, update_test_case_code_by_key
 from app.workflows.state_machine import CODE_VALIDATION
 
-_SYSTEM_PROMPT = """You are an expert Java Spring Boot Architect specializing in Test-Driven Development (TDD).
+def _get_system_prompt(lang: str, framework: str) -> str:
+    lang = (lang or "python").lower()
+    framework = (framework or "pytest").lower()
+    if lang == "python":
+        return """You are an expert Python TDD Software Engineer.
 
-Given the test case specification, identified responsible functions, API contracts, and target language/framework (Java Spring Boot with JUnit 5 and Mockito):
+Given the test case specification, API contracts, and target language/framework (Python with Pytest):
+1. Generate complete, executable, clean pytest test functions.
+2. Follow the standard Arrange-Act-Assert (AAA) pattern.
+3. For API endpoint tests, use the provided `client` or `api_client` fixture to send HTTP requests (e.g. `client.post('/api/...', json=payload)` or `client.get('/api/...')`).
+4. Assert HTTP response status codes and expected response body properties/errors.
+5. NEVER invent non-existent class or module imports (e.g. DO NOT hallucinate `from app.services... import ...` unless explicitly present in codebase context).
+6. Include inline docstrings and comments referencing the Acceptance Criteria.
+
+Return ONLY clean, valid Python test function code without markdown code blocks (```) or conversational filler.
+"""
+    elif lang in ("java", "kotlin"):
+        return """You are an expert Java Spring Boot Architect specializing in Test-Driven Development (TDD).
+
+Given the test case specification, identified responsible functions, API contracts, and target framework (JUnit 5 with Mockito):
 1. Generate complete, compilable, production-ready JUnit 5 test methods.
 2. Follow the standard Arrange-Act-Assert (AAA) pattern.
-3. For Unit/Service tests: Mock external repositories/collaborators using Mockito (`when(...).thenReturn(...)`, `verify(...)`, `doThrow(...)`).
-4. For Controller/API tests: Assert HTTP request/response payloads, status codes (200, 201, 400, 401, 403, 409, 422), and header specifications.
-5. Specifically target and test the RESPONSIBLE FUNCTIONS identified for this test case across the 3-tier architecture (`Controller -> Service -> Repository`).
-6. Include inline comments referencing the Acceptance Criteria and scenario under test.
-
-Target Language: {language}
-Target Framework: {framework}
+3. For Unit/Service tests: Mock external repositories/collaborators using Mockito (`when(...).thenReturn(...)`, `verify(...)`).
+4. For Controller/API tests: Assert HTTP request/response payloads and status codes.
+5. Include inline comments referencing the Acceptance Criteria and scenario under test.
 
 Return ONLY clean, valid Java test method code without markdown code blocks (```) or conversational filler.
+"""
+    else:
+        return """You are an expert TypeScript / JavaScript Engineer specializing in TDD.
+
+Given the test case specification and API contracts:
+1. Generate complete, clean Jest / Supertest test blocks.
+2. Follow Arrange-Act-Assert (AAA).
+3. Assert HTTP response status codes and payload properties.
+
+Return ONLY clean, valid test code without markdown code blocks (```) or conversational filler.
 """
 
 
@@ -104,11 +128,11 @@ class CodeGeneratorAgent(BaseAgent):
             code_res = router.generate_code(
                 "test_generation",
                 prompt=prompt,
-                system=_SYSTEM_PROMPT.format(language=lang, framework=framework)
+                system=_get_system_prompt(lang, framework)
             )
             total_latency += (code_res.latency_ms or 0)
 
-            generated_code = self._clean_code(code_res.text, lang, framework, key, resp_funcs)
+            generated_code = self._clean_code(code_res.text, lang, framework, key, resp_funcs, tc)
             lines_in_test = len(generated_code.strip().split("\n"))
             total_lines += lines_in_test
 
@@ -168,9 +192,11 @@ class CodeGeneratorAgent(BaseAgent):
         return state
 
     def _build_prompt(self, story, tc, resp_funcs, contracts, lang, framework, package_name="com.app.tests"):
-        resp_funcs_text = "\n".join(f"  - {f}" for f in resp_funcs) if resp_funcs else "  - Primary service handler"
+        resp_funcs_text = "\n".join(f"  - {f}" for f in resp_funcs) if resp_funcs else "  - Primary API handler"
         contract_text = "\n".join(f"  - {c.get('method', 'GET')} {c.get('path', '/')} (service: {c.get('service', 'unknown')})" for c in contracts[:4])
         pkg_info = f"\nRoot Package: {package_name}" if package_name else ""
+        req_spec = tc.get("request_spec") or {}
+        res_spec = tc.get("expected_response_spec") or {}
 
         return f"""User Story: {story.get('title', '')}
 Story Description: {story.get('description', '')}
@@ -180,16 +206,27 @@ Scenario Type: {tc.get('scenario_type', 'positive').upper()}
 Description: {tc.get('description', '')}
 Expected Result: {tc.get('expected_result', '')}{pkg_info}
 
+Request Specification:
+- Method: {req_spec.get('method', 'GET')}
+- Endpoint: {req_spec.get('endpoint', '/api/resource')}
+- Headers: {req_spec.get('headers', {})}
+- Payload Body: {req_spec.get('body')}
+
+Expected Response:
+- Status Code: {res_spec.get('status_code', 200)}
+- Response Body: {res_spec.get('response_body')}
+- Assertions: {res_spec.get('assertions', [])}
+
 Responsible Functions / Target Methods to Test:
 {resp_funcs_text}
 
 API Contracts Available:
 {contract_text}
 
-Generate a complete, executable {framework} test method in {lang} that explicitly tests the scenario and responsible functions above.
+Generate a complete, executable {framework} test function/method in {lang} that explicitly tests the scenario above.
 """
 
-    def _clean_code(self, raw_code, lang, framework, test_key, resp_funcs):
+    def _clean_code(self, raw_code, lang, framework, test_key, resp_funcs, tc=None):
         """Strip markdown ticks if present or format code."""
         text = raw_code.strip()
         if text.startswith("```"):
@@ -202,18 +239,27 @@ Generate a complete, executable {framework} test method in {lang} that explicitl
         
         if not text or text.startswith("[MOCK]"):
             # Provide high quality template based on lang and framework
-            return self._generate_fallback_code(lang, framework, test_key, resp_funcs)
+            return self._generate_fallback_code(lang, framework, test_key, resp_funcs, tc)
         return text
 
-    def _generate_fallback_code(self, lang, framework, test_key, resp_funcs):
-        func_comment = ", ".join(resp_funcs) if resp_funcs else "Target Handler"
+    def _generate_fallback_code(self, lang, framework, test_key, resp_funcs, tc=None):
+        tc = tc or {}
+        req_spec = tc.get("request_spec") or {}
+        res_spec = tc.get("expected_response_spec") or {}
+        method = (req_spec.get("method") or "POST").lower()
+        endpoint = req_spec.get("endpoint") or "/api/resource"
+        body = req_spec.get("body")
+        status_code = res_spec.get("status_code") or 200
+        title = tc.get("title", test_key)
+        func_comment = ", ".join(resp_funcs) if resp_funcs else title
+
         if lang in ("java", "kotlin"):
             return f"""    /**
-     * Test Case: {test_key}
-     * Target Responsible Functions: {func_comment}
+     * Test Case: {test_key} - {title}
+     * Target: {func_comment}
      */
     @Test
-    @DisplayName("Verify {test_key} - {func_comment}")
+    @DisplayName("Verify {test_key} - {title}")
     void test_{test_key.lower().replace('-', '_')}() {{
         // Arrange
         // Given valid request payload mapped to {func_comment}
@@ -224,40 +270,34 @@ Generate a complete, executable {framework} test method in {lang} that explicitl
 
         // Assert
         assertNotNull(response, "Response should not be null");
-        assertEquals(200, response.getStatusCodeValue(), "Expected HTTP 200 OK");
-        assertTrue(response.getBody().containsKey("data"), "Response should contain data payload");
+        assertEquals({status_code}, response.getStatusCodeValue(), "Expected HTTP {status_code}");
     }}"""
         elif lang == "python":
-            return f"""def test_{test_key.lower().replace('-', '_')}(api_client):
+            body_str = json.dumps(body) if body is not None else None
+            req_call = f'client.{method}("{endpoint}", json={body_str})' if body_str else f'client.{method}("{endpoint}")'
+            return f"""def test_{test_key.lower().replace('-', '_')}(client):
     \"\"\"
-    Test Case: {test_key}
-    Target Responsible Functions: {func_comment}
+    Test Case: {test_key} - {title}
+    Expected: HTTP {status_code}
     \"\"\"
-    # Arrange
-    payload = {{"status": "ACTIVE", "requestId": "REQ-{test_key}"}}
-
-    # Act
-    response = api_client.post("/api/resource", json=payload)
+    # Arrange & Act
+    response = {req_call}
 
     # Assert
-    assert response.status_code in [200, 201], f"Expected success but got {{response.status_code}}"
-    data = response.json()
-    assert "data" in data or "id" in data"""
+    assert response.status_code == {status_code}, f"Expected {status_code} but got {{response.status_code}}"
+    if {status_code} in [200, 201]:
+        data = response.get_json() or {{}}
+        assert data is not None"""
         else:
             return f"""  /**
-   * Test Case: {test_key}
-   * Target Responsible Functions: {func_comment}
+   * Test Case: {test_key} - {title}
    */
-  it('should verify {test_key} targeting {func_comment}', async () => {{
-    // Arrange
-    const payload = {{ status: 'ACTIVE', requestId: '{test_key}' }};
-
-    // Act
-    const response = await request(app).post('/api/resource').send(payload);
+  it('should verify {test_key} ({title})', async () => {{
+    // Arrange & Act
+    const response = await request(app).{method}('{endpoint}'){f".send({json.dumps(body)})" if body else ""};
 
     // Assert
-    expect(response.status).toBe(200);
-    expect(response.body).toHaveProperty('data');
+    expect(response.status).toBe({status_code});
   }});"""
 
     def _write_test_files(self, workflow_id, project, story, test_code_snippets, lang, framework, workspace_path, log_entries, package_name="com.app.tests", custom_imports=None):

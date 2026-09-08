@@ -17,40 +17,21 @@ class TestCaseDeduplicator:
     def _extract_intent_signature(tc: Dict[str, Any]) -> str:
         """Extracts a fine-grained intent signature so separate boundary/validation cases are NOT falsely merged."""
         title = (tc.get("title") or "").lower()
-        desc = (tc.get("description") or "").lower()
-        combined = f"{title} {desc}"
         stype = (tc.get("scenario_type") or "positive").lower()
+        req = tc.get("request_spec") or {}
+        method = (req.get("method") or "GET").upper()
+        res = tc.get("expected_response_spec") or {}
+        status = str(res.get("status_code") or tc.get("expected_status_code") or "")
 
         # Extract AC key (e.g. AC-01, AC-02, etc.)
         ac_ids = tc.get("acceptance_criteria_ids") or []
         primary_ac = ac_ids[0] if ac_ids else "AC-GEN"
 
-        # Identify specific fine-grained scenario conditions
-        condition = "general"
-        if "incorrect current" in combined or "wrong current" in combined or "current password" in combined and "incorrect" in combined:
-            condition = "incorrect_current_pwd"
-        elif "multiple rule" in combined or "multi rule" in combined or "multiple failure" in combined or "multiple violation" in combined:
-            condition = "pwd_multiple_rule_failures"
-        elif "exactly 8" in combined or "exact 8" in combined or "8 char" in combined and ("compliant" in combined or "valid" in combined):
-            condition = "pwd_len_exact_8"
-        elif "shorter than 8" in combined or "min 8" in combined or "< 8" in combined or "below 8" in combined or "7 char" in combined or "short" in combined or "length" in combined:
-            condition = "pwd_len_under_8"
-        elif "special" in combined or "symbol" in combined or "non-alphanumeric" in combined:
-            condition = "pwd_missing_special"
-        elif "number" in combined or "digit" in combined or "numeric" in combined:
-            condition = "pwd_missing_number"
-        elif "previous jwt" in combined or "old jwt" in combined or "token invalidation" in combined or "invalidated jwt" in combined or "invalidation" in combined:
-            condition = "jwt_invalidation_after_change"
-        elif "missing jwt" in combined or "without jwt" in combined or "no jwt" in combined or "no token" in combined or "missing authorization" in combined or "unauthenticated" in combined:
-            condition = "auth_missing_jwt"
-        elif "invalid jwt" in combined or "tampered jwt" in combined or "malformed jwt" in combined or "expired jwt" in combined:
-            condition = "auth_invalid_jwt"
-        elif "leak" in combined or "not exposed" in combined or "never include" in combined or "plaintext" in combined or "hash exposure" in combined or "exposure" in combined:
-            condition = "security_no_pwd_hash_leakage"
-        elif "valid" in combined and ("success" in combined or "allow" in combined or "proceed" in combined):
-            condition = "happy_path_success"
+        # Extract meaningful alphanumeric tokens from title to capture specific condition
+        title_tokens = [w for w in re.sub(r"[^a-z0-9]", " ", title).split() if len(w) > 2 and w not in ("verify", "test", "should", "with", "when", "that", "from", "for", "the", "and", "request")]
+        title_sig = "_".join(title_tokens[:6]) if title_tokens else "general"
 
-        return f"{primary_ac}::{stype}::{condition}"
+        return f"{primary_ac}::{method}::{status}::{stype}::{title_sig}"
 
     @classmethod
     def deduplicate(cls, test_cases: List[Dict[str, Any]], story_key: str = "SBP101") -> List[Dict[str, Any]]:

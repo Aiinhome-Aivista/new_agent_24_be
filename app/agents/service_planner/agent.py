@@ -265,17 +265,33 @@ Analysis summary:
                     ep["test_scenarios"] = self._synthesize_test_scenarios(ep, acs)
 
             state["extracted_apis"] = extracted_apis
-            # Sync or enrich api_contracts for downstream test generators
+            # Sync or enrich api_contracts for downstream test generators, preserving existing Postman payloads & responses
+            existing_contracts = state.get("api_contracts", [])
             enriched_contracts = []
             for ep in extracted_apis:
+                ep_method = ep.get("method", "GET").upper()
+                ep_path = ep.get("path", ep.get("url", "/api"))
+                
+                # Match against existing Postman contract if available
+                matched_contract = next((c for c in existing_contracts if c.get("method", "").upper() == ep_method and (c.get("path") == ep_path or ep_path.endswith(c.get("path", "")))), None)
+                
+                sample_req = (matched_contract.get("sample_request") or matched_contract.get("body")) if matched_contract else ep.get("payload_schema")
+                sample_res = (matched_contract.get("sample_response") or matched_contract.get("response_example")) if matched_contract else ep.get("response_schema")
+                headers = matched_contract.get("headers", {}) if matched_contract else {}
+                status_code = matched_contract.get("expected_status_code", 200) if matched_contract else 200
+
                 enriched_contracts.append({
                     "service": impacted[0] if impacted else "CoreService",
-                    "method": ep.get("method", "GET").upper(),
-                    "path": ep.get("path", ep.get("url", "/api")),
+                    "method": ep_method,
+                    "path": ep_path,
                     "url": ep.get("url"),
                     "purpose": ep.get("purpose", ""),
-                    "request_schema": ep.get("payload_schema"),
-                    "response_schema": ep.get("response_schema"),
+                    "headers": headers,
+                    "sample_request": sample_req,
+                    "sample_response": sample_res,
+                    "request_schema": ep.get("payload_schema") or sample_req,
+                    "response_schema": ep.get("response_schema") or sample_res,
+                    "expected_status_code": status_code,
                     "test_scenarios": ep.get("test_scenarios", []),
                 })
             if enriched_contracts:

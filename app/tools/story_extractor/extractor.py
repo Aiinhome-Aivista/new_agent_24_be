@@ -371,23 +371,44 @@ class StoryDocumentExtractor:
                     if len(joined) > 10:
                         found_criteria.append(joined)
 
+        clean_text = clean_text.replace("\r\n", "\n")
+
         # Source B: Headed Sections (e.g. ## Acceptance Criteria)
         ac_section_pattern = re.compile(
-            r"(?:##?|\*\*)\s*(?:Acceptance Criteria|Conditions of Acceptance|Key Requirements|Deliverables|Milestones|Scope of Work|Validation Rules|Test Scenarios)[^\n]*\n([\s\S]*?)(?=\n(?:##|\*\*|$))",
+            r"(?:##?|\*\*)\s*(?:Acceptance Criteria|Conditions of Acceptance|Key Requirements|Deliverables|Milestones|Scope of Work|Validation Rules|Test Scenarios)[^\n]*\n([\s\S]*?)(?=\n##(?![#])\s+|\n---\s*\n##|$)",
             re.I,
         )
         for match in ac_section_pattern.finditer(clean_text):
-            section_content = match.group(1)
-            for line in section_content.split("\n"):
-                l = line.strip()
-                # Bullet or numbered item
-                bullet_m = re.match(r"^(?:[-*•]|\d+\.|\(?[a-z]\)|AC[-\s]?\d+[:.-]?)\s*(.+)", l, re.I)
-                if bullet_m:
-                    item_text = bullet_m.group(1).strip()
-                    if len(item_text) > 6 and not cls._is_header_or_noise(item_text):
-                        found_criteria.append(item_text)
-                elif l.lower().startswith("given ") or l.lower().startswith("when ") or l.lower().startswith("then "):
-                    found_criteria.append(l)
+            section_content = match.group(1).strip()
+            # If section contains sub-headings (### AC-01 or ### Scenario 1)
+            if "###" in section_content:
+                chunks = re.split(r"\n(?=###\s*)", section_content)
+                for chunk in chunks:
+                    c_clean = chunk.strip()
+                    if not c_clean:
+                        continue
+                    header_m = re.match(r"###\s*([^\n]+)", c_clean)
+                    h_title = header_m.group(1).strip() if header_m else ""
+                    body = c_clean[header_m.end():].strip() if header_m else c_clean
+                    clean_lines = [
+                        line.strip() for line in body.split("\n")
+                        if line.strip() and not line.strip().startswith("|") and not line.strip().startswith("```")
+                    ]
+                    full_scenario = f"{h_title}: " + " ".join(clean_lines) if clean_lines else h_title
+                    full_scenario = re.sub(r"\s+", " ", full_scenario).strip()
+                    if len(full_scenario) > 6:
+                        found_criteria.append(full_scenario)
+            else:
+                for line in section_content.split("\n"):
+                    l = line.strip()
+                    # Bullet or numbered item
+                    bullet_m = re.match(r"^(?:[-*•]|\d+\.|\(?[a-z]\)|AC[-\s]?\d+[:.-]?)\s*(.+)", l, re.I)
+                    if bullet_m:
+                        item_text = bullet_m.group(1).strip()
+                        if len(item_text) > 6 and not cls._is_header_or_noise(item_text):
+                            found_criteria.append(item_text)
+                    elif l.lower().startswith("given ") or l.lower().startswith("when ") or l.lower().startswith("then "):
+                        found_criteria.append(l)
 
         # Source C: Document-wide bullet points, Gherkin blocks, or modal rules
         if len(found_criteria) < 2:
@@ -410,7 +431,7 @@ class StoryDocumentExtractor:
         deduped_acs: List[Dict[str, str]] = []
         for item in found_criteria:
             cleaned_item = re.sub(r"^\*\*|\*\*$", "", item).strip()
-            cleaned_item = re.sub(r"^(?:AC-\d+[:.-]?|AC\s*\d+[:.-]?)\s*", "", cleaned_item, flags=re.I).strip()
+            cleaned_item = re.sub(r"^(?:AC[-\s]?\d+[:.\-—]?)\s*[:.\-—]?\s*", "", cleaned_item, flags=re.I).strip()
             key_hash = cleaned_item.lower()
             if key_hash not in seen and len(cleaned_item) >= 6:
                 seen.add(key_hash)

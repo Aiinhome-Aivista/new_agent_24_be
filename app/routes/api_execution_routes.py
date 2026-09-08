@@ -316,21 +316,85 @@ def ping_target():
 @api_execution_bp.route("/api-executor/sample-collections", methods=["GET"])
 @require_auth
 def list_sample_collections():
-    """Returns bundled Postman collections ready for testing."""
-    sample_path = os.path.join(os.path.dirname(__file__), "..", "..", "data", "collections", "auth_user_service_collection.json")
+    """Returns project-uploaded and bundled Postman collections ready for testing."""
+    project_uuid = request.args.get("project_uuid")
     collections = []
+    seen_names = set()
+
+    # 1. Project-uploaded collections from knowledge_documents / storage
+    if project_uuid:
+        try:
+            project = get_project(project_uuid)
+            if project:
+                from app.repositories.project_repo import list_knowledge_documents
+                docs = list_knowledge_documents(project["id"]) or []
+                for doc in docs:
+                    title = doc.get("title", "")
+                    doc_type = (doc.get("doc_type") or "").lower()
+                    source_path = doc.get("source", "")
+                    if title.endswith(".json") or doc_type in ("postman_collection", "postman", "api_contract", "openapi"):
+                        content = None
+                        if source_path and os.path.isfile(source_path):
+                            try:
+                                with open(source_path, "r", encoding="utf-8") as f:
+                                    content = json.load(f)
+                            except Exception:
+                                pass
+                        
+                        if content and isinstance(content, dict):
+                            col_name = content.get("info", {}).get("name", title)
+                            if col_name not in seen_names:
+                                seen_names.add(col_name)
+                                collections.append({
+                                    "id": doc.get("uuid", f"doc-{doc.get('id')}"),
+                                    "name": col_name,
+                                    "description": content.get("info", {}).get("description", f"Uploaded collection: {title}"),
+                                    "collection": content,
+                                    "is_project_collection": True
+                                })
+        except Exception as e:
+            print(f"[ApiExecutor] Error loading project collections: {e}")
+
+    # Also check workspace root for any .postman_collection.json
+    workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    for candidate_name in ["ticket-management.postman_collection.json"]:
+        candidate_path = os.path.join(workspace_root, candidate_name)
+        if os.path.exists(candidate_path):
+            try:
+                with open(candidate_path, "r", encoding="utf-8") as f:
+                    content = json.load(f)
+                    col_name = content.get("info", {}).get("name", candidate_name)
+                    if col_name not in seen_names:
+                        seen_names.add(col_name)
+                        collections.append({
+                            "id": "ticket-management-collection",
+                            "name": col_name,
+                            "description": content.get("info", {}).get("description", "Support Ticket Management API Collection"),
+                            "collection": content,
+                            "is_project_collection": True
+                        })
+            except Exception:
+                pass
+
+    # 2. Bundled Auth & User Profile collection
+    sample_path = os.path.join(os.path.dirname(__file__), "..", "..", "data", "collections", "auth_user_service_collection.json")
     if os.path.exists(sample_path):
         try:
             with open(sample_path, "r", encoding="utf-8") as f:
                 content = json.load(f)
-                collections.append({
-                    "id": "auth-user-service",
-                    "name": content.get("info", {}).get("name", "Auth & User Profile API"),
-                    "description": content.get("info", {}).get("description", ""),
-                    "collection": content,
-                })
+                col_name = content.get("info", {}).get("name", "Auth & User Profile API")
+                if col_name not in seen_names:
+                    seen_names.add(col_name)
+                    collections.append({
+                        "id": "auth-user-service",
+                        "name": col_name,
+                        "description": content.get("info", {}).get("description", ""),
+                        "collection": content,
+                        "is_project_collection": False
+                    })
         except Exception:
             pass
+
     return ok({"collections": collections})
 
 
@@ -362,7 +426,34 @@ def run_autonomous_verification():
     project_uuid = body.get("project_uuid")
     is_mock = bool(body.get("is_mock", False))
 
-    # Auto-fallback to bundled Auth Postman collection if not provided
+    # Auto-fallback: check project collections, then bundled Auth Postman collection
+    if not collection_data and project_uuid:
+        try:
+            project = get_project(project_uuid)
+            if project:
+                from app.repositories.project_repo import list_knowledge_documents
+                docs = list_knowledge_documents(project["id"]) or []
+                for doc in docs:
+                    source_path = doc.get("source", "")
+                    if source_path and os.path.isfile(source_path) and doc.get("title", "").endswith(".json"):
+                        with open(source_path, "r", encoding="utf-8") as f:
+                            collection_data = json.load(f)
+                            collection_name = collection_data.get("info", {}).get("name", doc.get("title"))
+                            break
+        except Exception:
+            pass
+
+    if not collection_data:
+        workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        ticket_col_path = os.path.join(workspace_root, "ticket-management.postman_collection.json")
+        if os.path.exists(ticket_col_path):
+            try:
+                with open(ticket_col_path, "r", encoding="utf-8") as f:
+                    collection_data = json.load(f)
+                    collection_name = collection_data.get("info", {}).get("name")
+            except Exception:
+                pass
+
     if not collection_data:
         sample_path = os.path.join(os.path.dirname(__file__), "..", "..", "data", "collections", "auth_user_service_collection.json")
         if os.path.exists(sample_path):

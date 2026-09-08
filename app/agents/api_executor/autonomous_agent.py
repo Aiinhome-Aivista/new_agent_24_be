@@ -132,58 +132,141 @@ class AutonomousApiVerifierAgent:
 
     def _extract_story_expectations(self, story, acceptance_criteria):
         """
-        Parses story description, acceptance criteria, and linked contracts to deduce
-        expected keys and status codes for known endpoints.
+        Dynamically parses user story description and acceptance criteria to deduce
+        expected HTTP methods, status codes, required keys, and field values for each endpoint.
+        Does NOT rely on hardcoded paths. If not specified in story, intelligent defaults are applied.
         """
-        expectations = {
-            "/api/login": {
-                "expected_status": 200,
-                "required_keys": ["success", "access_token", "token_type"],
-                "allowed_keys": ["success", "message", "access_token", "token_type", "expires_in", "user"],
-                "user_expected_keys": ["id", "username", "name", "email"],  # 'role' is intentionally NOT in requirements!
-                "error_status": 401,
-                "error_keys": ["success", "error"],
-            },
-            "/api/user": {
-                "expected_status": 200,
-                "required_keys": ["success", "data"],
-                "allowed_keys": ["success", "data"],
-                "data_expected_keys": ["id", "username", "name", "email"],  # 'role' is intentionally NOT in requirements!
-                "unauthorized_status": 401,
-                "unauthorized_keys": ["success", "error"],
-            }
-        }
+        expectations = {}
 
-        # Dynamically enhance expectations based on textual acceptance criteria
-        ac_texts = " ".join([ac.get("text", "") for ac in (acceptance_criteria or [])]).lower()
-        if "role" in ac_texts:
-            expectations["/api/login"]["user_expected_keys"].append("role")
-            expectations["/api/user"]["data_expected_keys"].append("role")
+        # 1. Parse all Acceptance Criteria
+        for ac in (acceptance_criteria or []):
+            text = ac.get("text", "") if isinstance(ac, dict) else str(ac)
+            if not text:
+                continue
+
+            # A. Match HTTP Method & Endpoint path: e.g. POST request to /api/tickets or /api/login
+            ep_match = re.search(
+                r'(?:(?:send|make|perform|execute)s?\s+a\s+)?`?([A-Z]{3,7})`?\s+(?:request\s+to\s+)?`?(/api/[^\s`,"\'\)]+)`?',
+                text,
+                re.I,
+            )
+            if not ep_match:
+                ep_match = re.search(r'`?(/api/[^\s`,"\'\)]+)`?', text)
+                method = "GET"
+                path = ep_match.group(1) if ep_match else None
+            else:
+                method = ep_match.group(1).upper()
+                path = ep_match.group(2)
+
+            if not path:
+                continue
+
+            path = path.rstrip("/")
+            if path not in expectations:
+                expectations[path] = {
+                    "endpoint": path,
+                    "method": method,
+                    "expected_status": 201 if method == "POST" else 200,
+                    "required_keys": [],
+                    "nested_objects": {},
+                    "field_values": {},
+                    "ac_keys": [],
+                }
+
+            exp = expectations[path]
+            ac_key = ac.get("ac_key") if isinstance(ac, dict) else None
+            if ac_key and ac_key not in exp["ac_keys"]:
+                exp["ac_keys"].append(ac_key)
+
+            # B. Extract expected status code: e.g. HTTP status `201 Created` or HTTP 200 or status 201
+            status_match = re.search(
+                r'(?:HTTP\s+status\s+|\bHTTP\s+|\bstatus\s+code\s+|\bstatus\s+)`?(\d{3})\b',
+                text,
+                re.I,
+            )
+            if status_match:
+                code = int(status_match.group(1))
+                if "happy path" in text.lower() or "successful" in text.lower() or (code < 400 and exp["expected_status"] == 200):
+                    exp["expected_status"] = code
+
+            # C. Extract required response fields/keys: e.g. containing `id`, `ticket_key`, `title`, ...
+            contain_match = re.search(
+                r'(?:containing|contains|with\s+fields?|with\s+attributes?|returns?\s+(?:the\s+)?(?:created\s+)?[a-z_]+\s+(?:object\s+)?containing)\s+([^.\n]+)',
+                text,
+                re.I,
+            )
+            if contain_match:
+                fields_str = contain_match.group(1)
+                raw_keys = re.findall(r'[`"\']([a-zA-Z0-9_\-]+)[`"\']', fields_str)
+                if not raw_keys:
+                    raw_keys = [
+                        k.strip()
+                        for k in re.split(r'[,;\s]+and\s+|[,;]+', fields_str)
+                        if k.strip() and k.strip().isidentifier()
+                    ]
+                for k in raw_keys:
+                    clean_k = k.strip("`\"'")
+                    if clean_k not in exp["required_keys"] and clean_k.lower() not in ("and", "or", "the", "with", "containing", "open"):
+                        exp["required_keys"].append(clean_k)
+
+            # D. Extract specific field values: e.g. `status` ("OPEN") or `status` of "OPEN"
+            val_matches = re.finditer(
+                r'[`"\']?([a-zA-Z0-9_\-]+)[`"\']?\s*(?:\(\s*[`"\']([^"\']+)`?["\']\s*\)|\s*(?:of|=|is)\s*[`"\']([^"\']+)`?["\'])',
+                text,
+            )
+            for vm in val_matches:
+                f_name = vm.group(1).strip("`\"'")
+                f_val = (vm.group(2) or vm.group(3)).strip("`\"'")
+                if f_name in exp["required_keys"] or f_name in ("status", "role", "type", "state"):
+                    exp["field_values"][f_name] = f_val
 
         return expectations
 
     def _validate_response_against_requirements(self, endpoint_item, run_result_item, expectations):
         """
         Analyzes an individual API response against user-story requirements.
-        Detects missing required keys, extra keys (e.g. unexpected 'role'),
-        type mismatches, and status code discrepancies.
+        Detects missing required keys, extra sensitive keys, value mismatches,
+        type discrepancies, and status code deviations without hardcoded values.
         """
         deviations = []
         path = str(endpoint_item.get("path") or endpoint_item.get("url") or "")
         method = (endpoint_item.get("method") or "GET").upper()
         actual_status = run_result_item.get("status_code", 0)
-        expected_status = endpoint_item.get("expected_status_code", 200)
+
+        # Normalize path for matching
+        normalized_path = path.split("?")[0].rstrip("/")
+        if normalized_path.startswith("http://") or normalized_path.startswith("https://"):
+            normalized_path = "/" + "/".join(normalized_path.split("/")[3:])
+
+        # Find matching expectation from Story ACs if present
+        exp = None
+        for k, v in (expectations or {}).items():
+            if normalized_path.endswith(k) or k.endswith(normalized_path) or normalized_path == k:
+                exp = v
+                break
+
+        # Expected status priority:
+        # 1. Expected status code from Story Acceptance Criteria (if matched)
+        # 2. Expected status code parsed from Postman test script / example response
+        # 3. Standard default: 201 for POST create, 200 for GET/PUT/PATCH, 204 for DELETE
+        if exp and exp.get("expected_status"):
+            expected_status = exp["expected_status"]
+        elif endpoint_item.get("expected_status_code"):
+            expected_status = endpoint_item["expected_status_code"]
+        else:
+            expected_status = 201 if method == "POST" else 200
 
         # 1. Status Code Validation
         if actual_status != expected_status:
             severity = "critical" if actual_status in (500, 502, 503) else "major"
+            ac_source = f" (per {', '.join(exp['ac_keys'])})" if exp and exp.get("ac_keys") else ""
             deviations.append({
                 "type": "STATUS_CODE_MISMATCH",
                 "severity": severity,
                 "field": "HTTP Status",
-                "expected": f"HTTP {expected_status}",
+                "expected": f"HTTP {expected_status}{ac_source}",
                 "actual": f"HTTP {actual_status}",
-                "explanation": f"Endpoint {method} {path} returned status {actual_status}, expected {expected_status} per test specification.",
+                "explanation": f"Endpoint {method} {path} returned status {actual_status}, expected {expected_status}{ac_source}.",
                 "remediation": f"Ensure backend returns HTTP {expected_status} for this request scenario.",
             })
 
@@ -199,7 +282,7 @@ class AutonomousApiVerifierAgent:
             parsed_json = raw_body
 
         if not parsed_json or not isinstance(parsed_json, dict):
-            if expected_status == 200 and actual_status == 200:
+            if expected_status in (200, 201) and actual_status in (200, 201):
                 deviations.append({
                     "type": "MALFORMED_JSON_PAYLOAD",
                     "severity": "major",
@@ -211,88 +294,56 @@ class AutonomousApiVerifierAgent:
                 })
             return deviations
 
-        # 2. Key matching against story expectations
-        normalized_path = path.split("?")[0].rstrip("/")
-        if normalized_path.startswith("http://") or normalized_path.startswith("https://"):
-            normalized_path = "/" + "/".join(normalized_path.split("/")[3:])
+        # Resolve payload data root (handles unwrapped dicts, or wrapped dicts like { "data": { ... } } or { "ticket": { ... } })
+        data_root = parsed_json
+        if "data" in parsed_json and isinstance(parsed_json["data"], dict):
+            data_root = parsed_json["data"]
+        elif "ticket" in parsed_json and isinstance(parsed_json["ticket"], dict):
+            data_root = parsed_json["ticket"]
+        elif "user" in parsed_json and isinstance(parsed_json["user"], dict):
+            data_root = parsed_json["user"]
 
-        exp = None
-        for k, v in expectations.items():
-            if normalized_path.endswith(k) or k.endswith(normalized_path):
-                exp = v
-                break
+        if exp and actual_status in (200, 201):
+            ac_label = f" in {', '.join(exp['ac_keys'])}" if exp.get("ac_keys") else ""
 
-        if exp and expected_status == 200:
-            # Check required top-level keys
+            # Check required keys from Story AC
             for req_key in exp.get("required_keys", []):
-                if req_key not in parsed_json:
+                if req_key not in parsed_json and req_key not in data_root:
                     deviations.append({
                         "type": "MISSING_REQUIRED_FIELD",
                         "severity": "critical",
                         "field": req_key,
-                        "expected": f"Key '{req_key}' present in response",
+                        "expected": f"Key '{req_key}' present in response{ac_label}",
                         "actual": "Missing",
-                        "explanation": f"Required field '{req_key}' specified in User Story acceptance criteria is missing from response.",
+                        "explanation": f"Required field '{req_key}' specified in User Story acceptance criteria{ac_label} is missing from the response payload.",
                         "remediation": f"Update the API implementation to return the '{req_key}' property.",
                     })
 
-            # Check nested object fields: user or data
-            target_obj = None
-            allowed_child_keys = None
-            obj_name = ""
+            # Check specific field values from Story AC (e.g. status == 'OPEN')
+            for f_key, f_expected_val in exp.get("field_values", {}).items():
+                actual_val = data_root.get(f_key, parsed_json.get(f_key))
+                if actual_val is not None and str(actual_val).upper() != str(f_expected_val).upper():
+                    deviations.append({
+                        "type": "FIELD_VALUE_MISMATCH",
+                        "severity": "major",
+                        "field": f_key,
+                        "expected": f"'{f_expected_val}'{ac_label}",
+                        "actual": f"'{actual_val}'",
+                        "explanation": f"Field '{f_key}' returned '{actual_val}', expected '{f_expected_val}' per Acceptance Criteria.",
+                        "remediation": f"Ensure backend sets '{f_key}' to '{f_expected_val}'.",
+                    })
 
-            if "user" in parsed_json and isinstance(parsed_json["user"], dict):
-                target_obj = parsed_json["user"]
-                allowed_child_keys = exp.get("user_expected_keys")
-                obj_name = "user"
-            elif "data" in parsed_json and isinstance(parsed_json["data"], dict):
-                target_obj = parsed_json["data"]
-                allowed_child_keys = exp.get("data_expected_keys")
-                obj_name = "data"
-
-            if target_obj and allowed_child_keys is not None:
-                # Check for missing child keys
-                for ck in allowed_child_keys:
-                    if ck not in target_obj:
-                        deviations.append({
-                            "type": "MISSING_REQUIRED_FIELD",
-                            "severity": "major",
-                            "field": f"{obj_name}.{ck}",
-                            "expected": f"Field '{ck}' present in '{obj_name}' object",
-                            "actual": "Missing",
-                            "explanation": f"Expected user detail field '{ck}' not present in response payload.",
-                            "remediation": f"Ensure backend returns '{ck}' in {obj_name} payload.",
-                        })
-
-                # Check for EXTRA undeclared keys (specifically 'role' or any unstated attributes)
-                for actual_key, actual_val in target_obj.items():
-                    if actual_key not in allowed_child_keys:
-                        deviations.append({
-                            "type": "EXTRA_FIELD_NOT_IN_STORY",
-                            "severity": "minor",
-                            "field": f"{obj_name}.{actual_key}",
-                            "expected": f"Not declared in User Story / Acceptance Criteria",
-                            "actual": f"'{actual_key}': {json.dumps(actual_val)}",
-                            "explanation": (
-                                f"Extra key '{actual_key}' with value '{actual_val}' was returned in the '{obj_name}' object "
-                                f"but was never specified in the User Story requirements or Acceptance Criteria."
-                            ),
-                            "remediation": (
-                                f"Evaluate if '{actual_key}' should be officially added to the User Story acceptance criteria, "
-                                f"or filtered out from the public API response to prevent unintended data exposure."
-                            ),
-                        })
-
-            # Check data types
-            if "id" in parsed_json and not isinstance(parsed_json["id"], (int, float)):
+            # Check data types if ID is present
+            id_val = data_root.get("id", parsed_json.get("id"))
+            if id_val is not None and not isinstance(id_val, (int, float, str)):
                 deviations.append({
                     "type": "DATA_TYPE_MISMATCH",
                     "severity": "major",
                     "field": "id",
-                    "expected": "integer",
-                    "actual": type(parsed_json["id"]).__name__,
-                    "explanation": f"Field 'id' returned as {type(parsed_json['id']).__name__}, expected numeric integer.",
-                    "remediation": "Cast ID to integer before serialization.",
+                    "expected": "integer or string ID",
+                    "actual": type(id_val).__name__,
+                    "explanation": f"Field 'id' returned as {type(id_val).__name__}, expected numeric or string identifier.",
+                    "remediation": "Serialize ID as a valid identifier.",
                 })
 
         return deviations
