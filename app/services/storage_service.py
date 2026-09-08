@@ -1,7 +1,7 @@
 import os
 from .storage.factory import StorageFactory
 
-def save_file(file_name: str, content_bytes: bytes, project_id: int, project_name: str = " project\) -> str:
+def save_file(file_name: str, content_bytes: bytes, project_id: int, project_name: str = "") -> str:
     """
     Saves the file using the globally configured Storage Provider (AWS, AZURE, DEFAULT).
     Returns the storage URI or path.
