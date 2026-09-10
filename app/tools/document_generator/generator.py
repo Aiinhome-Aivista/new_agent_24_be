@@ -267,6 +267,101 @@ def render_autonomous_evidence_html(evidence_data, out_path=None, out_dir="./evi
         for d in devs
     ]) if devs else '<tr><td colspan="5" style="text-align:center; padding: 12px; color: #10b981;">No deviations or anomalies detected.</td></tr>'
 
+    import html as _html
+    import json as _json
+
+    snapshots_html_blocks = []
+    for idx, d in enumerate(devs):
+        sev = (d.get("severity") or "minor").upper()
+        api_info = d.get("api_call") or {}
+        method = (d.get("method") or api_info.get("method") or "GET").upper()
+        url = d.get("url") or api_info.get("url") or d.get("endpoint") or evidence_data.get("target_host", "")
+        status_code = d.get("status_code") or api_info.get("status_code") or 200
+        duration_ms = d.get("duration_ms") or api_info.get("duration_ms") or 0
+
+        # Request payload
+        raw_req = d.get("request_payload") if d.get("request_payload") is not None else api_info.get("request_payload")
+        if raw_req is None or raw_req == "" or raw_req == {}:
+            req_str = "[No Request Payload Body - GET / Parameterless Request]"
+        elif isinstance(raw_req, (dict, list)):
+            req_str = _json.dumps(raw_req, indent=2)
+        else:
+            try:
+                req_str = _json.dumps(_json.loads(str(raw_req)), indent=2)
+            except Exception:
+                req_str = str(raw_req)
+
+        # Response payload
+        raw_resp = d.get("response_payload") if d.get("response_payload") is not None else api_info.get("response_payload")
+        if raw_resp is None or raw_resp == "":
+            resp_str = "[Empty Response Body]"
+        elif isinstance(raw_resp, (dict, list)):
+            resp_str = _json.dumps(raw_resp, indent=2)
+        else:
+            try:
+                resp_str = _json.dumps(_json.loads(str(raw_resp)), indent=2)
+            except Exception:
+                resp_str = str(raw_resp)
+
+        sev_color = "#ef4444" if sev == "CRITICAL" else ("#f59e0b" if sev == "MAJOR" else "#38bdf8")
+        sev_bg = "rgba(239, 68, 68, 0.15)" if sev == "CRITICAL" else ("rgba(245, 158, 11, 0.15)" if sev == "MAJOR" else "rgba(56, 189, 248, 0.15)")
+        status_color = "#10b981" if str(status_code).startswith("2") else "#ef4444"
+
+        snapshots_html_blocks.append(f"""
+        <div class="evidence-snapshot-card">
+            <div class="terminal-bar">
+                <div class="terminal-dots">
+                    <span class="dot dot-red"></span>
+                    <span class="dot dot-yellow"></span>
+                    <span class="dot dot-green"></span>
+                </div>
+                <div class="terminal-title">
+                    <span class="sev-pill" style="background: {sev_bg}; color: {sev_color}; border: 1px solid {sev_color}40;">{sev}</span>
+                    <strong style="color: #f8fafc; font-size: 11px;">EVIDENCE SNAPSHOT #{idx + 1}: {_html.escape(str(d.get('type', 'ANOMALY')))}</strong>
+                    <span style="color: #94a3b8; font-size: 11px; margin-left: 6px;">({_html.escape(str(d.get('field', '')))})</span>
+                </div>
+                <div class="terminal-status">
+                    <span style="color: {status_color}; font-weight: 700; font-family: monospace; font-size: 11px;">HTTP {status_code}</span>
+                    <span style="color: #64748b; font-size: 10px; margin-left: 8px;">{duration_ms}ms</span>
+                </div>
+            </div>
+            <div class="snapshot-body">
+                <div class="url-strip">
+                    <span class="method-tag">{_html.escape(method)}</span>
+                    <span class="url-code">{_html.escape(str(url))}</span>
+                </div>
+
+                <div class="findings-box">
+                    <div><strong style="color: #f97316;">• Field Target:</strong> <code style="color: #f8fafc; font-weight: 600;">{_html.escape(str(d.get('field', '')))}</code></div>
+                    <div><strong style="color: #ef4444;">• Live Observation:</strong> <code style="color: #fca5a5;">{_html.escape(str(d.get('actual', '')))}</code></div>
+                    <div><strong style="color: #10b981;">• Expected Contract:</strong> <span style="color: #cbd5e1;">{_html.escape(str(d.get('expected', '')))}</span></div>
+                    <div style="margin-top: 4px; color: #94a3b8; font-size: 11px;"><strong>• Explanation:</strong> {_html.escape(str(d.get('explanation', '')))}</div>
+                    <div style="color: #60a5fa; font-size: 11px;"><strong>• Remediation:</strong> {_html.escape(str(d.get('remediation', '')))}</div>
+                </div>
+
+                <div class="code-box">
+                    <div class="code-box-header">▶ REQUEST PAYLOAD (BODY SENT)</div>
+                    <pre class="code-pre">{_html.escape(req_str)}</pre>
+                </div>
+
+                <div class="code-box">
+                    <div class="code-box-header">▶ LIVE CAPTURED SERVER RESPONSE (EVIDENCE)</div>
+                    <pre class="code-pre code-resp">{_html.escape(resp_str)}</pre>
+                </div>
+            </div>
+        </div>
+        """)
+
+    snapshots_section_html = ""
+    if snapshots_html_blocks:
+        snapshots_section_html = f"""
+        <h2 style="font-size: 15px; color: #f8fafc; margin-top: 28px;">Detailed Anomaly & Bug Evidence Snapshots ({len(snapshots_html_blocks)})</h2>
+        <p style="margin: -8px 0 16px 0; color: #94a3b8; font-size: 11px; font-style: italic;">
+            Deterministic captures of the exact HTTP request URL, request body payload (if present), and live server response for each identified anomaly.
+        </p>
+        {"".join(snapshots_html_blocks)}
+        """
+
     results = evidence_data.get("results", [])
     res_rows = "".join([
         f"""<tr>
@@ -290,6 +385,16 @@ def render_autonomous_evidence_html(evidence_data, out_path=None, out_dir="./evi
             body {{ background: #ffffff !important; color: #000000 !important; font-size: 10pt; }}
             .container {{ max-width: 100% !important; margin: 0 !important; box-shadow: none !important; border: none !important; padding: 0 !important; }}
             .no-print {{ display: none !important; }}
+            .evidence-snapshot-card {{ break-inside: avoid; background: #ffffff !important; border: 1px solid #cbd5e1 !important; box-shadow: none !important; margin-bottom: 16px; }}
+            .terminal-bar {{ background: #f1f5f9 !important; border-bottom: 1px solid #cbd5e1 !important; }}
+            .terminal-title strong {{ color: #0f172a !important; }}
+            .url-strip {{ background: #f8fafc !important; border-color: #cbd5e1 !important; }}
+            .url-code {{ color: #0f172a !important; }}
+            .findings-box {{ background: #f8fafc !important; border-color: #cbd5e1 !important; color: #0f172a !important; }}
+            .findings-box code {{ color: #991b1b !important; }}
+            .code-box {{ border-color: #cbd5e1 !important; }}
+            .code-box-header {{ background: #f1f5f9 !important; color: #475569 !important; }}
+            .code-pre {{ background: #f8fafc !important; color: #0f172a !important; max-height: none !important; }}
         }}
         body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 30px 15px; line-height: 1.5; }}
         .container {{ max-width: 950px; margin: 0 auto; background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 32px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }}
@@ -302,6 +407,23 @@ def render_autonomous_evidence_html(evidence_data, out_path=None, out_dir="./evi
         table {{ width: 100%; border-collapse: collapse; font-size: 12px; margin: 12px 0 24px 0; }}
         th {{ background: #0f172a; color: #94a3b8; text-align: left; padding: 8px; border-bottom: 2px solid #334155; font-size: 10.5px; text-transform: uppercase; }}
         .checksum {{ background: #0f172a; border: 1px dashed #475569; border-radius: 8px; padding: 12px 16px; font-family: monospace; font-size: 11px; color: #94a3b8; margin-top: 24px; word-break: break-all; }}
+        .evidence-snapshot-card {{ background: #111827; border: 1px solid #334155; border-radius: 8px; margin-bottom: 20px; overflow: hidden; box-shadow: 0 4px 14px rgba(0,0,0,0.3); }}
+        .terminal-bar {{ background: #1e293b; padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #334155; }}
+        .terminal-dots {{ display: flex; gap: 5px; }}
+        .dot {{ width: 10px; height: 10px; border-radius: 50%; display: inline-block; }}
+        .dot-red {{ background: #ef4444; }}
+        .dot-yellow {{ background: #f59e0b; }}.dot-green {{ background: #10b981; }}
+        .terminal-title {{ display: flex; align-items: center; gap: 6px; }}
+        .sev-pill {{ font-size: 9px; font-weight: 800; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; }}
+        .snapshot-body {{ padding: 14px; }}
+        .url-strip {{ background: #0f172a; padding: 6px 10px; border-radius: 6px; border: 1px solid #334155; font-family: monospace; font-size: 11.5px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; word-break: break-all; }}
+        .method-tag {{ background: #ea580c; color: #fff; font-weight: 800; font-size: 10px; padding: 2px 7px; border-radius: 4px; }}
+        .url-code {{ color: #38bdf8; font-weight: 600; }}
+        .findings-box {{ background: rgba(15, 23, 42, 0.7); border: 1px solid #334155; border-radius: 6px; padding: 10px 12px; font-size: 11.5px; line-height: 1.6; margin-bottom: 12px; }}
+        .code-box {{ margin-top: 10px; border: 1px solid #334155; border-radius: 6px; overflow: hidden; }}
+        .code-box-header {{ background: #1e293b; color: #94a3b8; font-size: 9.5px; font-weight: 700; padding: 4px 10px; letter-spacing: 0.5px; font-family: monospace; }}
+        .code-pre {{ background: #090d16; color: #e2e8f0; padding: 10px; margin: 0; font-family: Consolas, "Courier New", monospace; font-size: 10.5px; max-height: 220px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; line-height: 1.4; }}
+        .code-resp {{ border-left: 2px solid #ea580c; }}
     </style>
 </head>
 <body>
@@ -356,6 +478,8 @@ def render_autonomous_evidence_html(evidence_data, out_path=None, out_dir="./evi
                 {dev_rows}
             </tbody>
         </table>
+
+        {snapshots_section_html}
 
         <h2 style="font-size: 15px; color: #f8fafc;">Endpoint Execution Telemetry</h2>
         <table>

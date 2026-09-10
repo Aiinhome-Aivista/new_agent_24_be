@@ -4,6 +4,7 @@ Renders audit-grade test evidence packages with tables, metrics, deviation analy
 and tamper-evident cryptographic SHA-256 seals.
 """
 import os
+import json
 import docx
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -233,6 +234,194 @@ def generate_docx_evidence(evidence_data, out_path=None, out_dir="./evidence_out
 
             c_rem = dev_table.cell(row_idx, 4)
             c_rem.paragraphs[0].add_run(d.get("remediation", "")).font.size = Pt(8)
+
+        # Section 3.1: Attached API Call Evidence Snapshots
+        h3_sub = doc.add_heading("3.1 Attached API Call Evidence Snapshots", level=3)
+        h3_sub.paragraph_format.space_before = Pt(14)
+        h3_sub.paragraph_format.space_after = Pt(4)
+
+        p_desc = doc.add_paragraph()
+        r_desc = p_desc.add_run(
+            "Deterministic audit evidence captures: The following containerized snapshots record the exact "
+            "HTTP method, target API URL, request payload body (if present), and live server response captured "
+            "for each anomalous endpoint."
+        )
+        r_desc.font.size = Pt(8.5)
+        r_desc.font.italic = True
+        r_desc.font.color.rgb = RGBColor(100, 116, 139)
+        p_desc.paragraph_format.space_after = Pt(8)
+
+        for idx, d in enumerate(devs):
+            sev = d.get("severity", "minor").upper()
+            api_info = d.get("api_call") or {}
+            method = (d.get("method") or api_info.get("method") or "GET").upper()
+            url = d.get("url") or api_info.get("url") or d.get("endpoint") or evidence_data.get("target_host", "")
+            status_code = d.get("status_code") or api_info.get("status_code") or "N/A"
+            duration_ms = d.get("duration_ms") or api_info.get("duration_ms") or 0
+
+            # Request payload formatting
+            raw_req = d.get("request_payload") if d.get("request_payload") is not None else api_info.get("request_payload")
+            if raw_req is None or raw_req == "" or raw_req == {}:
+                req_text = "[No Request Payload Body - GET / Parameterless Request]"
+            elif isinstance(raw_req, (dict, list)):
+                req_text = json.dumps(raw_req, indent=2)
+            else:
+                try:
+                    req_text = json.dumps(json.loads(str(raw_req)), indent=2)
+                except Exception:
+                    req_text = str(raw_req)
+
+            # Response payload formatting
+            raw_resp = d.get("response_payload") if d.get("response_payload") is not None else api_info.get("response_payload")
+            if raw_resp is None or raw_resp == "":
+                raw_resp = "[Empty Response Body]"
+            elif isinstance(raw_resp, (dict, list)):
+                resp_text = json.dumps(raw_resp, indent=2)
+            else:
+                try:
+                    resp_text = json.dumps(json.loads(str(raw_resp)), indent=2)
+                except Exception:
+                    resp_text = str(raw_resp)
+
+            # Truncate if response is excessively long
+            if len(resp_text) > 3000:
+                resp_text = resp_text[:3000] + "\n... [Truncated for audit brevity - view raw JSON artifact for complete payload] ..."
+
+            # Evidence Snapshot Table
+            snap_table = doc.add_table(rows=5, cols=1)
+            snap_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+            _set_table_borders(snap_table)
+
+            # Row 0: Banner
+            c0 = snap_table.cell(0, 0)
+            _set_cell_shading(c0, "0F172A")
+            p0 = c0.paragraphs[0]
+            p0.paragraph_format.space_before = Pt(4)
+            p0.paragraph_format.space_after = Pt(4)
+
+            r0_sev = p0.add_run(f"EVIDENCE SNAPSHOT #{idx + 1}  [{sev}]  ")
+            r0_sev.font.bold = True
+            r0_sev.font.size = Pt(9.5)
+            if sev == "CRITICAL":
+                r0_sev.font.color.rgb = RGBColor(251, 113, 133)
+            elif sev == "MAJOR":
+                r0_sev.font.color.rgb = RGBColor(251, 191, 36)
+            else:
+                r0_sev.font.color.rgb = RGBColor(56, 189, 248)
+
+            r0_type = p0.add_run(f"{d.get('type', 'ANOMALY')} — HTTP {status_code} ({duration_ms} ms)")
+            r0_type.font.bold = True
+            r0_type.font.size = Pt(9)
+            r0_type.font.color.rgb = RGBColor(241, 245, 249)
+
+            # Row 1: Target API Call URL
+            c1 = snap_table.cell(1, 0)
+            _set_cell_shading(c1, "F8FAFC")
+            p1 = c1.paragraphs[0]
+            p1.paragraph_format.space_before = Pt(3)
+            p1.paragraph_format.space_after = Pt(3)
+
+            r1_lbl = p1.add_run("TARGET API URL:  ")
+            r1_lbl.font.bold = True
+            r1_lbl.font.size = Pt(8.5)
+            r1_lbl.font.color.rgb = RGBColor(71, 85, 105)
+
+            r1_m = p1.add_run(f"[{method}] ")
+            r1_m.font.bold = True
+            r1_m.font.size = Pt(8.5)
+            r1_m.font.color.rgb = RGBColor(234, 88, 12)
+
+            r1_url = p1.add_run(str(url))
+            r1_url.font.name = "Consolas"
+            r1_url.font.size = Pt(8.5)
+            r1_url.font.bold = True
+            r1_url.font.color.rgb = RGBColor(15, 23, 42)
+
+            # Row 2: Discrepancy Findings
+            c2 = snap_table.cell(2, 0)
+            _set_cell_shading(c2, "FFFFFF")
+            p2 = c2.paragraphs[0]
+            p2.paragraph_format.space_before = Pt(3)
+            p2.paragraph_format.space_after = Pt(3)
+
+            r2_t = p2.add_run(f"• Discrepancy Target: ")
+            r2_t.font.bold = True
+            r2_t.font.size = Pt(8.5)
+            r2_tf = p2.add_run(f"{d.get('field', '')}\n")
+            r2_tf.font.bold = True
+            r2_tf.font.size = Pt(8.5)
+            r2_tf.font.color.rgb = RGBColor(234, 88, 12)
+
+            r2_obs = p2.add_run("• Live Server Observation: ")
+            r2_obs.font.bold = True
+            r2_obs.font.size = Pt(8.5)
+            r2_obsv = p2.add_run(f"{d.get('actual', '')}\n")
+            r2_obsv.font.size = Pt(8.5)
+            r2_obsv.font.color.rgb = RGBColor(225, 29, 72)
+
+            r2_exp = p2.add_run("• Expected Contract: ")
+            r2_exp.font.bold = True
+            r2_exp.font.size = Pt(8.5)
+            r2_expv = p2.add_run(f"{d.get('expected', '')}\n")
+            r2_expv.font.size = Pt(8.5)
+            r2_expv.font.color.rgb = RGBColor(16, 185, 129)
+
+            r2_ex = p2.add_run("• Explanation: ")
+            r2_ex.font.bold = True
+            r2_ex.font.size = Pt(8.5)
+            r2_exv = p2.add_run(f"{d.get('explanation', '')}\n")
+            r2_exv.font.size = Pt(8)
+            r2_exv.font.color.rgb = RGBColor(71, 85, 105)
+
+            r2_rem = p2.add_run("• Remediation Guidance: ")
+            r2_rem.font.bold = True
+            r2_rem.font.size = Pt(8.5)
+            r2_remv = p2.add_run(f"{d.get('remediation', '')}")
+            r2_remv.font.size = Pt(8)
+            r2_remv.font.color.rgb = RGBColor(30, 64, 175)
+
+            # Row 3: Request Payload
+            c3 = snap_table.cell(3, 0)
+            _set_cell_shading(c3, "F1F5F9")
+            p3 = c3.paragraphs[0]
+            p3.paragraph_format.space_before = Pt(3)
+            p3.paragraph_format.space_after = Pt(2)
+            r3_h = p3.add_run("▶ REQUEST PAYLOAD (BODY SENT)")
+            r3_h.font.bold = True
+            r3_h.font.size = Pt(8)
+            r3_h.font.color.rgb = RGBColor(71, 85, 105)
+
+            p3_code = c3.add_paragraph()
+            p3_code.paragraph_format.space_before = Pt(0)
+            p3_code.paragraph_format.space_after = Pt(3)
+            r3_c = p3_code.add_run(req_text)
+            r3_c.font.name = "Consolas"
+            r3_c.font.size = Pt(7.5)
+            r3_c.font.color.rgb = RGBColor(30, 41, 59)
+
+            # Row 4: Captured Response Payload
+            c4 = snap_table.cell(4, 0)
+            _set_cell_shading(c4, "F8FAFC")
+            p4 = c4.paragraphs[0]
+            p4.paragraph_format.space_before = Pt(3)
+            p4.paragraph_format.space_after = Pt(2)
+            r4_h = p4.add_run("▶ LIVE CAPTURED RESPONSE (SERVER OBSERVATION)")
+            r4_h.font.bold = True
+            r4_h.font.size = Pt(8)
+            r4_h.font.color.rgb = RGBColor(71, 85, 105)
+
+            p4_code = c4.add_paragraph()
+            p4_code.paragraph_format.space_before = Pt(0)
+            p4_code.paragraph_format.space_after = Pt(4)
+            r4_c = p4_code.add_run(resp_text)
+            r4_c.font.name = "Consolas"
+            r4_c.font.size = Pt(7.5)
+            r4_c.font.color.rgb = RGBColor(15, 23, 42)
+
+            # Spacing between anomaly cards
+            p_gap = doc.add_paragraph()
+            p_gap.paragraph_format.space_before = Pt(0)
+            p_gap.paragraph_format.space_after = Pt(6)
     else:
         p_nodev = doc.add_paragraph()
         r = p_nodev.add_run("No requirement deviations or anomalies detected. All response payloads strictly adhere to declared schemas.")

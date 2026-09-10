@@ -346,6 +346,35 @@ class AutonomousApiVerifierAgent:
                     "remediation": "Serialize ID as a valid identifier.",
                 })
 
+        # Check for unexpected extra keys (e.g. undeclared 'role' or sensitive attributes)
+        target_dict = data_root if isinstance(data_root, dict) else (parsed_json if isinstance(parsed_json, dict) else None)
+        if target_dict and actual_status in (200, 201):
+            allowed_pool = set(exp.get("required_keys", []) if exp else [])
+            for k, v in target_dict.items():
+                if k == "role" and k not in allowed_pool:
+                    deviations.append({
+                        "type": "EXTRA_FIELD_NOT_IN_STORY",
+                        "severity": "minor",
+                        "field": f"user.{k}" if "user" in parsed_json else k,
+                        "expected": "Not declared in User Story / Acceptance Criteria",
+                        "actual": f"'{k}': {json.dumps(v)}",
+                        "explanation": f"Extra key '{k}' with value '{v}' was returned in the API response but was not declared in acceptance criteria.",
+                        "remediation": f"Evaluate whether '{k}' should be formally documented in requirements or omitted to avoid unintentional data exposure.",
+                    })
+
+        # Check for failed test assertions from test script executions
+        for assertion in run_result_item.get("assertions", []):
+            if not assertion.get("passed", True):
+                deviations.append({
+                    "type": "ASSERTION_FAILURE",
+                    "severity": "critical" if actual_status >= 500 else "major",
+                    "field": "Test Assertion",
+                    "expected": f"Assertion '{assertion.get('name')}' PASS",
+                    "actual": "Assertion FAILED",
+                    "explanation": f"Automated test assertion '{assertion.get('name')}' failed against response status HTTP {actual_status}.",
+                    "remediation": "Verify API contract response data or update assertion rules to match expected specification.",
+                })
+
         return deviations
 
     def execute_autonomous_verification(
@@ -425,6 +454,7 @@ class AutonomousApiVerifierAgent:
         # 5. Requirement Validation & Anomaly Detection
         self._log("REQUIREMENT_VALIDATION", "Cross-checking live API responses against Acceptance Criteria and declared schemas...")
 
+        execution_timestamp = datetime.now(timezone.utc).isoformat()
         all_deviations = []
         structured_results = []
         critical_count = 0
@@ -434,9 +464,79 @@ class AutonomousApiVerifierAgent:
         for idx, r in enumerate(run_result.results):
             ep = endpoints[idx] if idx < len(endpoints) else {}
             deviations = self._validate_response_against_requirements(ep, r, story_expectations)
-            all_deviations.extend(deviations)
 
+            # Redact secrets for structured evidence
+            redacted_req = redact_sensitive_data(r.get("request"))
+            redacted_resp_headers = redact_sensitive_data(r.get("resp_headers") or r.get("headers"))
+            redacted_resp_body = redact_sensitive_data(r.get("response_body") or r.get("resp_body"))
+
+            method = (r.get("method") or (redacted_req.get("method") if isinstance(redacted_req, dict) else None) or ep.get("method") or "GET").upper()
+            url = r.get("url") or (redacted_req.get("url") if isinstance(redacted_req, dict) else None) or f"{clean_base_url}{ep.get('path', '')}"
+            endpoint = ep.get("path") or r.get("url") or url
+            status_code = r.get("status_code", 0)
+            duration_ms = r.get("duration_ms", 0)
+
+            # Extract request payload
+            req_payload = None
+            if isinstance(redacted_req, dict):
+                req_payload = redacted_req.get("body") or redacted_req.get("data")
+            elif isinstance(redacted_req, str):
+                try:
+                    req_payload = json.loads(redacted_req)
+                except Exception:
+                    req_payload = redacted_req
+
+            if isinstance(req_payload, str):
+                try:
+                    req_payload = json.loads(req_payload)
+                except Exception:
+                    pass
+
+            # Extract response payload
+            resp_payload = redacted_resp_body
+            if isinstance(resp_payload, str):
+                try:
+                    resp_payload = json.loads(resp_payload)
+                except Exception:
+                    pass
+
+            # Build comprehensive API Call Evidence Snapshot
+            api_call_snapshot = {
+                "method": method,
+                "url": url,
+                "endpoint": endpoint,
+                "status_code": status_code,
+                "duration_ms": duration_ms,
+                "request_headers": (redacted_req.get("headers") if isinstance(redacted_req, dict) else {}) or {},
+                "request_payload": req_payload,
+                "response_headers": redacted_resp_headers or {},
+                "response_payload": resp_payload,
+                "captured_at": execution_timestamp,
+            }
+
+            # If endpoint execution failed or status 5xx but no deviation was caught, synthesize deviation
+            if (not r.get("passed", True) or status_code >= 500 or status_code == 0) and not deviations:
+                deviations.append({
+                    "type": "EXECUTION_FAILURE" if status_code != 0 else "CONNECTION_FAILURE",
+                    "severity": "critical" if status_code >= 500 or status_code == 0 else "major",
+                    "field": "HTTP Execution",
+                    "expected": f"HTTP {ep.get('expected_status_code', 200)} with passing contract assertions",
+                    "actual": f"HTTP {status_code} ({'Connection Error' if status_code == 0 else 'Execution Failed'})",
+                    "explanation": f"Endpoint {method} {url} failed execution checks with status HTTP {status_code}.",
+                    "remediation": "Check target server logs, network routing, and payload constraints.",
+                })
+
+            # Attach API call snapshot directly to each deviation
             for dev in deviations:
+                dev["api_call"] = api_call_snapshot
+                dev["url"] = url
+                dev["method"] = method
+                dev["endpoint"] = endpoint
+                dev["status_code"] = status_code
+                dev["duration_ms"] = duration_ms
+                dev["request_payload"] = req_payload
+                dev["response_payload"] = resp_payload
+
                 sev = dev.get("severity", "minor").lower()
                 if sev == "critical":
                     critical_count += 1
@@ -447,29 +547,26 @@ class AutonomousApiVerifierAgent:
 
                 self._log(
                     "ANOMALY_DETECTION",
-                    f"[{dev.get('severity').upper()}] {dev.get('type')} on {r.get('method')} {r.get('url')}: {dev.get('explanation')}",
+                    f"[{dev.get('severity').upper()}] {dev.get('type')} on {method} {url}: {dev.get('explanation')}",
                     level="WARN" if sev != "critical" else "ERROR"
                 )
 
-            # Redact secrets for structured evidence
-            redacted_req = redact_sensitive_data(r.get("request"))
-            redacted_resp_headers = redact_sensitive_data(r.get("resp_headers") or r.get("headers"))
-            redacted_resp_body = redact_sensitive_data(r.get("response_body") or r.get("resp_body"))
+            all_deviations.extend(deviations)
 
             structured_results.append({
                 "test_key": r.get("test_key"),
-                "method": r.get("method"),
-                "endpoint": ep.get("path") or r.get("url"),
-                "url": r.get("url"),
-                "status_code": r.get("status_code"),
+                "method": method,
+                "endpoint": endpoint,
+                "url": url,
+                "status_code": status_code,
                 "expected_status_code": ep.get("expected_status_code", 200),
-                "duration_ms": r.get("duration_ms", 0),
+                "duration_ms": duration_ms,
                 "passed": r.get("passed", False),
                 "assertions": r.get("assertions", []),
                 "deviations": deviations,
                 "request": redacted_req,
                 "response": {
-                    "status_code": r.get("status_code"),
+                    "status_code": status_code,
                     "headers": redacted_resp_headers,
                     "body": redacted_resp_body,
                 }
