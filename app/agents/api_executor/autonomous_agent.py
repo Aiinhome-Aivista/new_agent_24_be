@@ -564,6 +564,9 @@ class AutonomousApiVerifierAgent:
                 "passed": r.get("passed", False),
                 "assertions": r.get("assertions", []),
                 "deviations": deviations,
+                "request_payload": req_payload,
+                "response_payload": resp_payload,
+                "api_call": api_call_snapshot,
                 "request": redacted_req,
                 "response": {
                     "status_code": status_code,

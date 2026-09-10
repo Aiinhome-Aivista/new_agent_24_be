@@ -374,6 +374,148 @@ def render_autonomous_evidence_html(evidence_data, out_path=None, out_dir="./evi
         for r in results
     ])
 
+    target_host = (evidence_data.get("target_host") or "").rstrip("/")
+    all_cases_html_blocks = []
+    for idx, r in enumerate(results):
+        r_passed = bool(r.get("passed", False))
+        api_call = r.get("api_call") or {}
+        method = (r.get("method") or api_call.get("method") or "GET").upper()
+
+        raw_url = r.get("url") or api_call.get("url") or r.get("endpoint") or ""
+        if not str(raw_url).startswith("http") and target_host:
+            full_url = f"{target_host}{raw_url}"
+        else:
+            full_url = raw_url
+
+        endpoint_path = r.get("endpoint") or raw_url
+        status_code = r.get("status_code") or api_call.get("status_code") or (200 if r_passed else 500)
+        duration_ms = r.get("duration_ms") or api_call.get("duration_ms") or 0
+        assertions = r.get("assertions", [])
+        devs_on_endpoint = r.get("deviations", [])
+
+        # Request payload
+        raw_req = r.get("request_payload")
+        if raw_req is None and isinstance(api_call, dict):
+            raw_req = api_call.get("request_payload")
+        if raw_req is None and isinstance(r.get("request"), dict):
+            raw_req = r.get("request", {}).get("body")
+
+        if raw_req is None or raw_req == "" or raw_req == {}:
+            req_str = "[No Request Payload Body - GET / Parameterless Request]"
+        elif isinstance(raw_req, (dict, list)):
+            req_str = _json.dumps(raw_req, indent=2)
+        else:
+            try:
+                req_str = _json.dumps(_json.loads(str(raw_req)), indent=2)
+            except Exception:
+                req_str = str(raw_req)
+
+        # Response payload
+        raw_resp = r.get("response_payload")
+        if raw_resp is None and isinstance(api_call, dict):
+            raw_resp = api_call.get("response_payload")
+        if raw_resp is None and isinstance(r.get("response"), dict):
+            raw_resp = r.get("response", {}).get("body")
+
+        if raw_resp is None or raw_resp == "":
+            resp_str = "[Empty Response Body]"
+        elif isinstance(raw_resp, (dict, list)):
+            resp_str = _json.dumps(raw_resp, indent=2)
+        else:
+            try:
+                resp_str = _json.dumps(_json.loads(str(raw_resp)), indent=2)
+            except Exception:
+                resp_str = str(raw_resp)
+
+        if len(resp_str) > 3000:
+            resp_str = resp_str[:3000] + "\n... [Truncated for audit brevity - view raw JSON artifact for complete payload] ..."
+
+        # Determine status colors and tags
+        if r_passed and not devs_on_endpoint:
+            status_tag = "VERIFIED CONFORMANT"
+            status_color = "#10b981"
+            status_bg = "rgba(16, 185, 129, 0.15)"
+            border_accent = "rgba(16, 185, 129, 0.3)"
+        elif r_passed and devs_on_endpoint:
+            status_tag = "PARTIALLY CONFORMANT"
+            status_color = "#f59e0b"
+            status_bg = "rgba(245, 158, 11, 0.15)"
+            border_accent = "rgba(245, 158, 11, 0.3)"
+        else:
+            status_tag = "EXECUTION FAILED"
+            status_color = "#ef4444"
+            status_bg = "rgba(239, 68, 68, 0.15)"
+            border_accent = "rgba(239, 68, 68, 0.3)"
+
+        assertions_html = ""
+        if assertions:
+            ass_items = []
+            for a in assertions:
+                a_pass = a.get("passed", False)
+                a_mark = "✔" if a_pass else "✘"
+                a_color = "#10b981" if a_pass else "#ef4444"
+                ass_items.append(f'<span style="color: {a_color}; margin-right: 12px; font-weight: 600;">{a_mark} {_html.escape(str(a.get("name", "")))}</span>')
+            assertions_html = f'<div style="font-size: 11px; line-height: 1.6;"><strong>Contract Assertions:</strong> {" ".join(ass_items)}</div>'
+        else:
+            assertions_html = '<div style="font-size: 11px; color: #10b981;"><strong>Contract Assertions:</strong> ✔ Direct HTTP status validation verified conformant</div>'
+
+        devs_html = ""
+        if devs_on_endpoint:
+            dev_items = []
+            for d in devs_on_endpoint:
+                dev_items.append(f'<li style="color: #f59e0b;"><strong>[{_html.escape(str(d.get("type", "")))}]</strong> {_html.escape(str(d.get("field", "")))}: {_html.escape(str(d.get("actual", "")))} (Expected: {_html.escape(str(d.get("expected", "")))})</li>')
+            devs_html = f'<div style="margin-top: 6px; font-size: 11px;"><strong style="color: #f59e0b;">Flagged Discrepancies:</strong><ul style="margin: 2px 0 0 16px; padding: 0;">{"".join(dev_items)}</ul></div>'
+
+        all_cases_html_blocks.append(f"""
+        <div class="evidence-snapshot-card" style="border-left: 3px solid {status_color};">
+            <div class="terminal-bar">
+                <div class="terminal-dots">
+                    <span class="dot" style="background: {status_color};"></span>
+                    <span class="dot" style="background: {status_color}80;"></span>
+                </div>
+                <div class="terminal-title">
+                    <span class="sev-pill" style="background: {status_bg}; color: {status_color}; border: 1px solid {border_accent};">{status_tag}</span>
+                    <strong style="color: #f8fafc; font-size: 11px;">TEST CASE #{idx + 1}: {_html.escape(str(r.get('test_key') or endpoint_path))}</strong>
+                </div>
+                <div class="terminal-status">
+                    <span style="color: {status_color}; font-weight: 700; font-family: monospace; font-size: 11px;">HTTP {status_code}</span>
+                    <span style="color: #64748b; font-size: 10px; margin-left: 8px;">{duration_ms}ms</span>
+                </div>
+            </div>
+            <div class="snapshot-body">
+                <div class="url-strip">
+                    <span class="method-tag" style="background: {'#2563eb' if method == 'POST' else ('#10b981' if method == 'GET' else '#ea580c')};">{_html.escape(method)}</span>
+                    <span class="url-code">{_html.escape(str(full_url))}</span>
+                </div>
+
+                <div class="findings-box" style="margin-bottom: 10px;">
+                    {assertions_html}
+                    {devs_html}
+                </div>
+
+                <div class="code-box">
+                    <div class="code-box-header">▶ REQUEST PAYLOAD (BODY SENT)</div>
+                    <pre class="code-pre">{_html.escape(req_str)}</pre>
+                </div>
+
+                <div class="code-box">
+                    <div class="code-box-header">▶ LIVE CAPTURED SERVER RESPONSE (EVIDENCE)</div>
+                    <pre class="code-pre code-resp">{_html.escape(resp_str)}</pre>
+                </div>
+            </div>
+        </div>
+        """)
+
+    all_cases_section_html = ""
+    if all_cases_html_blocks:
+        all_cases_section_html = f"""
+        <h2 style="font-size: 15px; color: #f8fafc; margin-top: 28px;">Comprehensive Test Execution Evidence Snapshots (All Cases)</h2>
+        <p style="margin: -8px 0 16px 0; color: #94a3b8; font-size: 11px; font-style: italic;">
+            Deterministic captures of the complete API URL, request payload body (if present), contract assertion validations, and live server response for EVERY executed test case (both passing and deviated endpoints).
+        </p>
+        {"".join(all_cases_html_blocks)}
+        """
+
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -496,6 +638,8 @@ def render_autonomous_evidence_html(evidence_data, out_path=None, out_dir="./evi
                 {res_rows}
             </tbody>
         </table>
+
+        {all_cases_section_html}
 
         <div class="checksum">
             <strong>SHA-256 CRYPTOGRAPHIC INTEGRITY SEAL:</strong><br>

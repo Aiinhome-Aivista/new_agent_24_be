@@ -112,6 +112,10 @@ def test_docx_and_html_evidence_snapshots_generation():
     assert "http://localhost:5001/api/user" in full_text
     assert "Internal Database Error" in full_text
 
+    assert "4.1 Comprehensive Test Execution Evidence Snapshots (All Cases)" in full_text
+    assert "TEST CASE #1" in full_text
+    assert "TEST CASE #2" in full_text
+
     # 2. Test HTML/PDF report generation with evidence snapshots
     html_path = render_autonomous_evidence_html(evidence_data, out_dir=out_dir)
     assert os.path.exists(html_path)
@@ -128,6 +132,107 @@ def test_docx_and_html_evidence_snapshots_generation():
     assert "Internal Database Error" in html_text
     assert "REQUEST PAYLOAD (BODY SENT)" in html_text
     assert "LIVE CAPTURED SERVER RESPONSE" in html_text
+    assert "Comprehensive Test Execution Evidence Snapshots (All Cases)" in html_text
+
+
+def test_all_successful_cases_evidence_snapshots_generation():
+    """Verifies that even when all tests pass (0 anomalies/deviations), full evidence snapshots are attached for every single case in both DOCX and HTML/PDF."""
+    success_evidence_data = {
+        "evidence_key": "EVID-ALL-PASS-01",
+        "traceability_id": "TRC-PASS-99999",
+        "story": {
+            "external_key": "STORY-200",
+            "title": "Clean User Profile & Order Checkout",
+        },
+        "target_host": "http://localhost:5001",
+        "collection_name": "Checkout Suite",
+        "summary_recommendation": "API conforms",
+        "decision_status": "Ready for Approval",
+        "decision_summary": "All test assertions passed and all returned payloads conform strictly to user-story acceptance criteria without anomalies or extraneous data.",
+        "total_endpoints": 2,
+        "passed_endpoints": 2,
+        "failed_endpoints": 0,
+        "total_deviations": 0,
+        "execution_timestamp": "2026-09-10T12:30:00Z",
+        "sha256_seal": "11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff",
+        "deviation_summary": {
+            "total_deviations": 0,
+            "critical": 0,
+            "major": 0,
+            "minor": 0,
+            "deviations": [],
+        },
+        "results": [
+            {
+                "test_key": "TC-SUCCESS-01",
+                "method": "POST",
+                "endpoint": "/api/checkout",
+                "url": "http://localhost:5001/api/checkout",
+                "status_code": 200,
+                "duration_ms": 18,
+                "passed": True,
+                "assertions": [
+                    {"name": "Status is 200 OK", "passed": True},
+                    {"name": "Order ID is returned", "passed": True},
+                ],
+                "deviations": [],
+                "request_payload": {"item_id": 42, "quantity": 1, "currency": "USD"},
+                "response_payload": {"status": "SUCCESS", "order_id": "ORD-7890", "total_price": 99.50},
+            },
+            {
+                "test_key": "TC-SUCCESS-02",
+                "method": "GET",
+                "endpoint": "/api/order/ORD-7890",
+                "url": "http://localhost:5001/api/order/ORD-7890",
+                "status_code": 200,
+                "duration_ms": 12,
+                "passed": True,
+                "assertions": [
+                    {"name": "Status is 200 OK", "passed": True},
+                    {"name": "Order status is CONFIRMED", "passed": True},
+                ],
+                "deviations": [],
+                "request_payload": None,
+                "response_payload": {"order_id": "ORD-7890", "status": "CONFIRMED", "items": [{"id": 42, "qty": 1}]},
+            },
+        ],
+    }
+
+    out_dir = os.path.join(os.path.dirname(__file__), "..", "evidence_output")
+    os.makedirs(out_dir, exist_ok=True)
+
+    # 1. Test DOCX generation for 100% successful run
+    docx_path = generate_docx_evidence(success_evidence_data, out_dir=out_dir)
+    assert os.path.exists(docx_path)
+    doc = docx.Document(docx_path)
+    full_text = "\n".join([p.text for p in doc.paragraphs])
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                full_text += "\n" + cell.text
+
+    assert "4.1 Comprehensive Test Execution Evidence Snapshots (All Cases)" in full_text
+    assert "VERIFIED CONFORMANT" in full_text
+    assert "http://localhost:5001/api/checkout" in full_text
+    assert "ORD-7890" in full_text
+    assert "REQUEST PAYLOAD (BODY SENT)" in full_text
+    assert "LIVE CAPTURED RESPONSE (SERVER OBSERVATION)" in full_text
+    assert "http://localhost:5001/api/order/ORD-7890" in full_text
+
+    # 2. Test HTML/PDF report generation for 100% successful run
+    html_path = render_autonomous_evidence_html(success_evidence_data, out_dir=out_dir)
+    assert os.path.exists(html_path)
+    with open(html_path, "r", encoding="utf-8") as f:
+        html_text = f.read()
+
+    assert "Comprehensive Test Execution Evidence Snapshots (All Cases)" in html_text
+    assert "VERIFIED CONFORMANT" in html_text
+    assert "http://localhost:5001/api/checkout" in html_text
+    assert "ORD-7890" in html_text
+    assert "REQUEST PAYLOAD (BODY SENT)" in html_text
+    assert "LIVE CAPTURED SERVER RESPONSE (EVIDENCE)" in html_text
+    assert "http://localhost:5001/api/order/ORD-7890" in html_text
+
 
 
 def test_autonomous_agent_response_validation_logic():
