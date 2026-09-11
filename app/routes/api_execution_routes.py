@@ -488,6 +488,17 @@ def run_autonomous_verification():
         docx_path = generate_docx_evidence(evidence, out_dir=out_dir)
         evidence["docx_path"] = docx_path
 
+        # Automatically copy to workspace root for direct user access
+        try:
+            workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+            if os.path.exists(workspace_root):
+                import shutil
+                ws_docx = os.path.join(workspace_root, f"{evidence_key}.docx")
+                shutil.copy2(docx_path, ws_docx)
+                evidence["workspace_docx_path"] = ws_docx
+        except Exception as ws_err:
+            print(f"[ApiExecutor] Notice: workspace copy: {ws_err}")
+
         # Generate HTML/PDF report
         html_path = render_autonomous_evidence_html(evidence, out_dir=out_dir)
         evidence["html_path"] = html_path
@@ -547,13 +558,20 @@ def download_evidence_docx(evidence_key):
     out_dir = os.path.join(os.path.dirname(__file__), "..", "..", "evidence_output")
     file_path = os.path.join(out_dir, f"{evidence_key}.docx")
 
+    # Check workspace root as fallback
+    workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    ws_file_path = os.path.join(workspace_root, f"{evidence_key}.docx")
+
     if not os.path.exists(file_path):
-        # Regenerate if stored in memory
-        ev = _AUTONOMOUS_EVIDENCE_STORE.get(evidence_key)
-        if ev:
-            file_path = generate_docx_evidence(ev, out_dir=out_dir)
+        if os.path.exists(ws_file_path):
+            file_path = ws_file_path
         else:
-            return fail("NOT_FOUND", "Evidence document not found", 404)
+            # Regenerate if stored in memory
+            ev = _AUTONOMOUS_EVIDENCE_STORE.get(evidence_key)
+            if ev:
+                file_path = generate_docx_evidence(ev, out_dir=out_dir)
+            else:
+                return fail("NOT_FOUND", "Evidence document not found", 404)
 
     return send_file(
         file_path,

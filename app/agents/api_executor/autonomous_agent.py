@@ -17,6 +17,8 @@ from app.repositories.project_repo import get_story, story_acceptance_criteria
 from app.repositories.test_repo import save_execution_run_with_results
 from app.tools.api_runner.collection_parser import parse_postman_collection
 from app.tools.api_runner.runner import HttpRunner, NewmanRunner, MockApiRunner
+from app.llm.model_router.router import get_router
+from app.llm.client.gemini_client import _clean_json_text
 
 
 # In-memory cached hosts for quick reuse across sessions
@@ -217,10 +219,255 @@ class AutonomousApiVerifierAgent:
             for vm in val_matches:
                 f_name = vm.group(1).strip("`\"'")
                 f_val = (vm.group(2) or vm.group(3)).strip("`\"'")
-                if f_name in exp["required_keys"] or f_name in ("status", "role", "type", "state"):
-                    exp["field_values"][f_name] = f_val
+    def _load_workspace_story_acs(self, story=None):
+        """
+        Dynamically discovers and extracts Acceptance Criteria from any story document
+        in the workspace or project knowledge base.
+        """
+        import os
+        import re
+        workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+        
+        candidates = []
+        if os.path.exists(workspace_root):
+            for root, _, files in os.walk(workspace_root):
+                if any(ignored in root for ignored in ("node_modules", ".git", "venv", ".system_generated", "dist", "build", "evidence_output")):
+                    continue
+                for f_name in files:
+                    if f_name.endswith(".md") or f_name.endswith(".txt"):
+                        candidates.append(os.path.join(root, f_name))
+        
+        story_hint = (story.get("title", "") if isinstance(story, dict) else str(story or "")).lower()
+        candidates.sort(key=lambda p: (
+            0 if story_hint and any(w in os.path.basename(p).lower() for w in story_hint.split() if len(w) > 3) else (
+                1 if "story" in os.path.basename(p).lower() else 2
+            )
+        ))
 
-        return expectations
+        for p in candidates:
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    content = f.read()
+                if "Acceptance Criteria" in content or "### AC" in content or "AC-01" in content:
+                    acs = []
+                    matches = re.finditer(r'###\s*(AC[-_]?\d+|\d+\.)\s*[—\-:]?\s*([^\n]+)\n(.*?)(?=\n###|\n---\s*$|\Z)', content, re.DOTALL)
+                    for m in matches:
+                        ac_key = m.group(1).strip()
+                        title = m.group(2).strip()
+                        body = m.group(3).strip()
+                        full_text = f"{title}\n{body}"
+                        acs.append({"ac_key": ac_key, "text": full_text})
+                    if acs:
+                        return acs
+            except Exception:
+                pass
+        return []
+
+    def _synthesize_ac_scenarios_ai(self, baseline_endpoints, story, acceptance_criteria):
+        """
+        Uses Cloud Gemini / Local LLM via ModelRouter to dynamically synthesize exact mutated
+        test scenarios for any user story and any Postman collection.
+        """
+        try:
+            router = get_router()
+            system_prompt = """You are an expert Autonomous API Verification Engineer specializing in dynamic test synthesis.
+Given a baseline Postman collection (API contracts, HTTP methods, URLs, sample headers, and baseline JSON payloads)
+and a list of Acceptance Criteria (ACs) for a User Story, you must synthesize executable API test scenarios.
+
+RULES:
+1. Generate exactly 1 test scenario for each Acceptance Criterion in the exact order.
+2. For happy paths / positive ACs: use the baseline endpoint and a compliant valid request payload.
+3. For negative/validation ACs: mutate, omit, or adjust the specific field, parameter, or path required to test the Acceptance Criterion (e.g. missing required fields, invalid enum/type, boundary constraints, non-JSON body, non-existent entity IDs), while keeping all other fields contract-compliant.
+4. Output ONLY a valid JSON array of test scenario objects matching this schema:
+[
+  {
+    "test_key": "1. AC-01 — Scenario Title",
+    "ac_key": "AC-01",
+    "method": "POST",
+    "path": "/api/path",
+    "headers": {"Content-Type": "application/json"},
+    "body": <json object or string or null>,
+    "expected_status_code": 201,
+    "expected_error_contains": "<substring if error expected, else null>",
+    "assertions": ["Status code is 201", "Assertion 2"]
+  }
+]
+"""
+            user_prompt = f"""
+Target User Story: {story.get('title') if isinstance(story, dict) else 'User Story'}
+Description: {story.get('description') if isinstance(story, dict) else ''}
+
+Baseline Postman Endpoints Contract:
+{json.dumps(baseline_endpoints, indent=2)}
+
+Acceptance Criteria to Test:
+{json.dumps(acceptance_criteria, indent=2)}
+
+Generate all {len(acceptance_criteria)} executable test scenarios in valid JSON format:
+"""
+            llm_res = router.generate_structured("test_generation", user_prompt, system=system_prompt)
+            raw_text = llm_res.text if hasattr(llm_res, "text") else str(llm_res)
+            cleaned = _clean_json_text(raw_text)
+            parsed = json.loads(cleaned)
+            if isinstance(parsed, dict):
+                for k in ("test_scenarios", "test_cases", "scenarios", "tests"):
+                    if k in parsed and isinstance(parsed[k], list):
+                        parsed = parsed[k]
+                        break
+            if isinstance(parsed, list) and len(parsed) >= len(acceptance_criteria):
+                self._log("AC_SYNTHESIS", f"AI Engine (Gemini) dynamically synthesized {len(parsed)} test scenarios.")
+                return parsed
+        except Exception as ex:
+            self._log("AC_SYNTHESIS", f"AI synthesis note: {ex}. Falling back to deterministic heuristic engine.", level="DEBUG")
+        return None
+
+    def synthesize_ac_scenarios(self, baseline_endpoints, story, acceptance_criteria):
+        """
+        Intelligently derives concrete, executable API test cases for every Acceptance Criterion
+        (AC-01 through AC-08, etc.) by combining baseline Postman collection contracts
+        with the validation rules, mutation requirements, and boundary constraints declared in the ACs.
+        """
+        ws_acs = self._load_workspace_story_acs(story)
+        if not acceptance_criteria or (ws_acs and len(acceptance_criteria) < len(ws_acs)):
+            acceptance_criteria = ws_acs or acceptance_criteria
+
+        if not acceptance_criteria:
+            self._log("AC_SYNTHESIS", "No story acceptance criteria available for dynamic scenario expansion. Using baseline endpoints.")
+            return baseline_endpoints
+
+        self._log("AC_SYNTHESIS", f"Synthesizing dynamic test scenarios for {len(acceptance_criteria)} Acceptance Criteria...")
+
+        # 1. First Attempt: AI-Powered Dynamic Scenario Synthesis
+        ai_scenarios = self._synthesize_ac_scenarios_ai(baseline_endpoints, story, acceptance_criteria)
+        if ai_scenarios:
+            return ai_scenarios
+
+        # 2. Fallback: Generic Dynamic Heuristic Synthesizer (Works for ANY schema/collection)
+        baseline_by_method = {}
+        for ep in baseline_endpoints:
+            m = (ep.get("method") or "GET").upper()
+            baseline_by_method[m] = ep
+
+        default_post = baseline_by_method.get("POST") or (baseline_endpoints[0] if baseline_endpoints else {})
+        default_get = baseline_by_method.get("GET") or (baseline_endpoints[-1] if baseline_endpoints else {})
+
+        default_payload = {}
+        if default_post and default_post.get("body"):
+            b = default_post["body"]
+            if isinstance(b, dict):
+                default_payload = copy.deepcopy(b)
+            elif isinstance(b, str):
+                try:
+                    default_payload = json.loads(b)
+                except Exception:
+                    default_payload = {}
+
+        scenarios = []
+        for idx, ac in enumerate(acceptance_criteria):
+            ac_key = ac.get("ac_key") if isinstance(ac, dict) else f"AC-{idx+1:02d}"
+            text = ac.get("text", "") if isinstance(ac, dict) else str(ac)
+            t_low = text.lower()
+
+            # Dynamic Method Extraction
+            method = "POST"
+            if any(k in t_low for k in ("get", "retrieve", "query", "fetch", "find", "search", "read")):
+                method = "GET"
+            elif "delete" in t_low or "remove" in t_low:
+                method = "DELETE"
+            elif "put" in t_low or "replace" in t_low:
+                method = "PUT"
+            elif "patch" in t_low or "update" in t_low:
+                method = "PATCH"
+            elif default_post:
+                method = default_post.get("method", "POST")
+
+            # Dynamic Status Code Extraction
+            status_match = re.search(r'(?:HTTP\s+status\s+|\bHTTP\s+|\bstatus\s+code\s+|\bstatus\s+)`?(\d{3})\b', text, re.I)
+            if status_match:
+                expected_status = int(status_match.group(1))
+            else:
+                if any(w in t_low for w in ("bad request", "reject", "invalid", "missing", "fails", "error", "prohibit")):
+                    expected_status = 400
+                elif any(w in t_low for w in ("not found", "non-existent", "missing id", "does not exist")):
+                    expected_status = 404
+                elif any(w in t_low for w in ("unauthorized", "unauthenticated", "invalid token")):
+                    expected_status = 401
+                elif any(w in t_low for w in ("forbidden", "permission denied")):
+                    expected_status = 403
+                elif method == "POST":
+                    expected_status = 201
+                else:
+                    expected_status = 200
+
+            # Dynamic Path Resolution
+            path_match = re.search(r'`?(/api/[^\s`,"\'\)]+)`?', text)
+            if path_match:
+                path = path_match.group(1)
+            elif method == "GET" and default_get.get("path"):
+                path = default_get.get("path")
+            elif default_post.get("path"):
+                path = default_post.get("path")
+            else:
+                path = "/api"
+
+            # Dynamic Scenario Payload Construction
+            sc_payload = copy.deepcopy(default_payload) if default_payload else None
+            sc_headers = {"Content-Type": "application/json"} if method in ("POST", "PUT", "PATCH") else {}
+            expected_err = None
+
+            # A. Missing Fields Mutation
+            if any(w in t_low for w in ("missing", "omitted", "without", "required fields")) and isinstance(sc_payload, dict):
+                for k in list(sc_payload.keys())[:2]:
+                    sc_payload.pop(k, None)
+                expected_err = "required"
+
+            # B. Non-JSON / Content-Type Mutation
+            elif any(w in t_low for w in ("non-json", "content-type", "plain text", "invalid format")):
+                sc_headers = {"Content-Type": "text/plain"}
+                sc_payload = "invalid=plain_text_data"
+                expected_err = "JSON"
+
+            # C. Non-existent Entity / 404 Path Mutation
+            elif expected_status == 404 or any(w in t_low for w in ("non-existent", "not found", "does not exist")):
+                path = re.sub(r'/\d+$', '/9999', path)
+                if not re.search(r'/\d+$', path) and not path.endswith('/9999'):
+                    path = f"{path.rstrip('/')}/9999"
+                sc_payload = None
+                expected_err = "not found"
+
+            # D. Invalid Field Value Mutation (Enum / Type)
+            elif any(w in t_low for w in ("invalid", "unrecognized", "unsupported")) and isinstance(sc_payload, dict):
+                for k, v in sc_payload.items():
+                    if isinstance(v, str):
+                        sc_payload[k] = "invalid_enum_value"
+                        break
+                expected_err = "invalid"
+
+            # E. Length / Boundary Mutation
+            elif any(w in t_low for w in ("length", "boundary", "short", "fewer than")) and isinstance(sc_payload, dict):
+                for k, v in sc_payload.items():
+                    if isinstance(v, str):
+                        sc_payload[k] = "X"
+                        break
+
+            # Scenario Title
+            first_line = text.strip().split("\n")[0].replace("###", "").strip()
+            test_key = f"{idx+1}. {ac_key} — {first_line[:60]}"
+
+            scenarios.append({
+                "test_key": test_key,
+                "ac_key": ac_key,
+                "method": method,
+                "path": path,
+                "headers": sc_headers,
+                "body": sc_payload,
+                "expected_status_code": expected_status,
+                "expected_error_contains": expected_err,
+                "assertions": [f"Status code is {expected_status}"]
+            })
+
+        self._log("AC_SYNTHESIS", f"Successfully generated {len(scenarios)} executable test scenarios covering all ACs.")
+        return scenarios
 
     def _validate_response_against_requirements(self, endpoint_item, run_result_item, expectations):
         """
@@ -246,13 +493,13 @@ class AutonomousApiVerifierAgent:
                 break
 
         # Expected status priority:
-        # 1. Expected status code from Story Acceptance Criteria (if matched)
-        # 2. Expected status code parsed from Postman test script / example response
+        # 1. Expected status code declared on the synthesized/parsed test endpoint item
+        # 2. Expected status code from Story Acceptance Criteria (if matched)
         # 3. Standard default: 201 for POST create, 200 for GET/PUT/PATCH, 204 for DELETE
-        if exp and exp.get("expected_status"):
-            expected_status = exp["expected_status"]
-        elif endpoint_item.get("expected_status_code"):
+        if endpoint_item.get("expected_status_code"):
             expected_status = endpoint_item["expected_status_code"]
+        elif exp and exp.get("expected_status"):
+            expected_status = exp["expected_status"]
         else:
             expected_status = 201 if method == "POST" else 200
 
@@ -273,6 +520,28 @@ class AutonomousApiVerifierAgent:
         # Parse response body as JSON
         raw_body = run_result_item.get("response_body") or run_result_item.get("resp_body") or ""
         parsed_json = None
+        if raw_body and isinstance(raw_body, str):
+            try:
+                parsed_json = json.loads(raw_body)
+            except Exception:
+                pass
+        elif isinstance(raw_body, dict):
+            parsed_json = raw_body
+
+        # Check expected error substring on negative tests
+        expected_err = endpoint_item.get("expected_error_contains")
+        if expected_err and actual_status >= 400:
+            resp_err_str = str(parsed_json.get("error", "") if isinstance(parsed_json, dict) else raw_body)
+            if expected_err.lower() not in resp_err_str.lower():
+                deviations.append({
+                    "type": "ERROR_MESSAGE_MISMATCH",
+                    "severity": "minor",
+                    "field": "Error Message",
+                    "expected": f"Contains '{expected_err}'",
+                    "actual": f"'{resp_err_str}'",
+                    "explanation": f"Error message did not contain expected text '{expected_err}' per Acceptance Criteria.",
+                    "remediation": "Align backend error message with acceptance criteria specification.",
+                })
         if raw_body and isinstance(raw_body, str):
             try:
                 parsed_json = json.loads(raw_body)
@@ -431,9 +700,9 @@ class AutonomousApiVerifierAgent:
         story_expectations = self._extract_story_expectations(story, acceptance_criteria)
 
         # 3. Postman Collection Ingestion
-        self._log("COLLECTION_MANAGEMENT", "Loading Postman collection specifications...")
-        endpoints = parse_postman_collection(collection_data)
-        if not endpoints:
+        self._log("COLLECTION_MANAGEMENT", "Loading baseline Postman collection specifications...")
+        baseline_endpoints = parse_postman_collection(collection_data)
+        if not baseline_endpoints:
             self._log("COLLECTION_MANAGEMENT", "No endpoints discovered in provided collection data.", level="ERROR")
             raise ValueError("No valid API endpoints found in the provided Postman collection.")
 
@@ -441,10 +710,13 @@ class AutonomousApiVerifierAgent:
         if not resolved_col_name and isinstance(collection_data, dict):
             resolved_col_name = collection_data.get("info", {}).get("name")
         resolved_col_name = resolved_col_name or "Verified Test Suite"
-        self._log("COLLECTION_MANAGEMENT", f"Successfully parsed {len(endpoints)} endpoints from collection '{resolved_col_name}'.")
+        self._log("COLLECTION_MANAGEMENT", f"Successfully parsed {len(baseline_endpoints)} baseline contract endpoints from '{resolved_col_name}'.")
+
+        # 3.1 Dynamic Acceptance Criteria Scenario Expansion (Agent Synthesizes AC test cases)
+        endpoints = self.synthesize_ac_scenarios(baseline_endpoints, story, acceptance_criteria)
 
         # 4. Deterministic API Execution
-        self._log("API_EXECUTION", f"Initiating deterministic execution against {clean_base_url} (Runner: HttpRunner)...")
+        self._log("API_EXECUTION", f"Initiating autonomous execution of {len(endpoints)} test scenarios against {clean_base_url} (Runner: HttpRunner)...")
 
         runner = MockApiRunner() if is_mock else HttpRunner(timeout=self.timeout)
         run_result = runner.run(endpoints=endpoints, base_url=clean_base_url)

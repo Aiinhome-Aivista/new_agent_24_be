@@ -11,6 +11,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml import parse_xml, OxmlElement
 from docx.oxml.ns import nsdecls, qn
+from app.tools.document_generator.snapshot_image_generator import generate_postman_snapshot_image
 
 
 def _set_cell_shading(cell, color_hex):
@@ -285,9 +286,35 @@ def generate_docx_evidence(evidence_data, out_path=None, out_dir="./evidence_out
                 except Exception:
                     resp_text = str(raw_resp)
 
-            # Truncate if response is excessively long
-            if len(resp_text) > 3000:
-                resp_text = resp_text[:3000] + "\n... [Truncated for audit brevity - view raw JSON artifact for complete payload] ..."
+            # Handle large response payload formatting with structured pagination
+            if len(resp_text) > 15000:
+                resp_text = resp_text[:15000] + "\n... [Long response payload preserved up to 15,000 characters — see companion JSON artifact for full uncompressed payload] ..."
+
+            # Generate and Embed Visual Postman Screenshot PNG Picture
+            snap_img_dir = os.path.join(out_dir, "snapshots")
+            try:
+                ast_preview = [f"Deviation Target: {d.get('field', '')}", f"Observed: {d.get('actual', '')}", f"Expected: {d.get('expected', '')}"]
+                snap_img = generate_postman_snapshot_image(
+                    method=method,
+                    url=url,
+                    status_code=status_code,
+                    duration_ms=duration_ms,
+                    request_payload=raw_req,
+                    response_payload=raw_resp,
+                    assertions=ast_preview,
+                    case_num=idx + 1,
+                    evidence_key=evidence_key,
+                    out_dir=snap_img_dir,
+                    test_key=f"Deviation #{idx + 1} [{sev}] {d.get('field', '')}"
+                )
+                if os.path.exists(snap_img):
+                    p_pic = doc.add_paragraph()
+                    p_pic.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    p_pic.paragraph_format.space_before = Pt(6)
+                    p_pic.paragraph_format.space_after = Pt(6)
+                    doc.add_picture(snap_img, width=Inches(6.5))
+            except Exception as e:
+                print(f"[DocxGenerator] Notice: Screenshot image generation skipped: {e}")
 
             # Evidence Snapshot Table
             snap_table = doc.add_table(rows=5, cols=1)
@@ -550,8 +577,35 @@ def generate_docx_evidence(evidence_data, out_path=None, out_dir="./evidence_out
                 except Exception:
                     resp_text = str(raw_resp)
 
-            if len(resp_text) > 3000:
-                resp_text = resp_text[:3000] + "\n... [Truncated for audit brevity - view raw JSON artifact for complete payload] ..."
+            # Handle large response payload formatting with structured pagination
+            if len(resp_text) > 15000:
+                resp_text = resp_text[:15000] + "\n... [Long response payload preserved up to 15,000 characters — see companion JSON artifact for full uncompressed payload] ..."
+
+            # Generate and Embed Visual Postman Screenshot PNG Picture
+            snap_img_dir = os.path.join(out_dir, "snapshots")
+            try:
+                ast_list = [a.get("name") if isinstance(a, dict) else str(a) for a in assertions] if assertions else [f"Status code is {status_code}"]
+                snap_img = generate_postman_snapshot_image(
+                    method=method,
+                    url=url,
+                    status_code=status_code,
+                    duration_ms=duration_ms,
+                    request_payload=raw_req,
+                    response_payload=raw_resp,
+                    assertions=ast_list,
+                    case_num=idx + 1,
+                    evidence_key=evidence_key,
+                    out_dir=snap_img_dir,
+                    test_key=res.get("test_key") or f"{method} {endpoint}"
+                )
+                if os.path.exists(snap_img):
+                    p_pic = doc.add_paragraph()
+                    p_pic.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    p_pic.paragraph_format.space_before = Pt(8)
+                    p_pic.paragraph_format.space_after = Pt(6)
+                    doc.add_picture(snap_img, width=Inches(6.5))
+            except Exception as e:
+                print(f"[DocxGenerator] Notice: Screenshot image generation skipped: {e}")
 
             snap_table = doc.add_table(rows=5, cols=1)
             snap_table.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -565,7 +619,7 @@ def generate_docx_evidence(evidence_data, out_path=None, out_dir="./evidence_out
             p0.paragraph_format.space_after = Pt(4)
 
             tag_label = "VERIFIED CONFORMANT" if res_passed and not devs_on_endpoint else ("PARTIALLY CONFORMANT" if res_passed else "EXECUTION FAILED")
-            r0_tag = p0.add_run(f"TEST CASE #{idx + 1}  [{tag_label}]  ")
+            r0_tag = p0.add_run(f"POSTMAN API EVIDENCE SNAPSHOT #{idx + 1}  [{tag_label}]  ")
             r0_tag.font.bold = True
             r0_tag.font.size = Pt(9.5)
             if res_passed and not devs_on_endpoint:
