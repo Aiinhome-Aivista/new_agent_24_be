@@ -3,6 +3,8 @@ API Executor routes — Standalone testing of local or deployed APIs against use
 Postman / Bruno collections, or custom endpoints without requiring repository checkouts.
 """
 import os
+import re
+import glob
 import uuid as _uuid
 import json
 import time
@@ -356,26 +358,25 @@ def list_sample_collections():
         except Exception as e:
             print(f"[ApiExecutor] Error loading project collections: {e}")
 
-    # Also check workspace root for any .postman_collection.json
+    # Dynamically scan workspace root for any *.postman_collection.json files
     workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-    for candidate_name in ["ticket-management.postman_collection.json"]:
-        candidate_path = os.path.join(workspace_root, candidate_name)
-        if os.path.exists(candidate_path):
-            try:
-                with open(candidate_path, "r", encoding="utf-8") as f:
-                    content = json.load(f)
-                    col_name = content.get("info", {}).get("name", candidate_name)
-                    if col_name not in seen_names:
-                        seen_names.add(col_name)
-                        collections.append({
-                            "id": "ticket-management-collection",
-                            "name": col_name,
-                            "description": content.get("info", {}).get("description", "Support Ticket Management API Collection"),
-                            "collection": content,
-                            "is_project_collection": True
-                        })
-            except Exception:
-                pass
+    for candidate_path in glob.glob(os.path.join(workspace_root, "*.postman_collection.json")):
+        try:
+            with open(candidate_path, "r", encoding="utf-8") as f:
+                content = json.load(f)
+                col_name = content.get("info", {}).get("name") or os.path.basename(candidate_path)
+                if col_name not in seen_names:
+                    seen_names.add(col_name)
+                    col_id = re.sub(r"[^a-z0-9\-]", "-", col_name.lower().strip())
+                    collections.append({
+                        "id": col_id,
+                        "name": col_name,
+                        "description": content.get("info", {}).get("description", f"Postman collection: {col_name}"),
+                        "collection": content,
+                        "is_project_collection": True
+                    })
+        except Exception as col_err:
+            print(f"[ApiExecutor] Warning: could not parse workspace collection {candidate_path}: {col_err}")
 
     # 2. Bundled Auth & User Profile collection
     sample_path = os.path.join(os.path.dirname(__file__), "..", "..", "data", "collections", "auth_user_service_collection.json")
@@ -420,7 +421,7 @@ def run_autonomous_verification():
     detects anomalies / extra fields (e.g. 'role'), and produces signed evidence.
     """
     body = request.get_json(silent=True) or {}
-    base_url = (body.get("base_url") or "http://localhost:5001").strip()
+    base_url = (body.get("base_url") or "").strip()
     collection_data = body.get("collection_json")
     collection_name = body.get("collection_name")
     story_uuid = body.get("story_uuid")
@@ -445,15 +446,17 @@ def run_autonomous_verification():
             pass
 
     if not collection_data:
+        # Dynamically scan for any .postman_collection.json in the workspace root
         workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-        ticket_col_path = os.path.join(workspace_root, "ticket-management.postman_collection.json")
-        if os.path.exists(ticket_col_path):
+        import glob as _glob
+        for _col_path in sorted(_glob.glob(os.path.join(workspace_root, "*.postman_collection.json"))):
             try:
-                with open(ticket_col_path, "r", encoding="utf-8") as f:
+                with open(_col_path, "r", encoding="utf-8") as f:
                     collection_data = json.load(f)
-                    collection_name = collection_data.get("info", {}).get("name")
+                    collection_name = collection_data.get("info", {}).get("name") or os.path.basename(_col_path)
+                    break
             except Exception:
-                pass
+                continue
 
     if not collection_data:
         sample_path = os.path.join(os.path.dirname(__file__), "..", "..", "data", "collections", "auth_user_service_collection.json")

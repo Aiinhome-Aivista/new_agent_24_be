@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 def generate_postman_snapshot_image(
     method="GET",
-    url="http://localhost:5001/api/tickets",
+    url="",
     status_code=200,
     duration_ms=30,
     request_payload=None,
@@ -30,7 +30,7 @@ def generate_postman_snapshot_image(
     out_path = os.path.join(out_dir, out_filename)
 
     method = str(method or "GET").upper()
-    url = str(url or "http://localhost:5001/")
+    url = str(url or "")
     status_code = int(status_code) if status_code else 200
     duration_ms = int(duration_ms) if duration_ms else 30
 

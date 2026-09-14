@@ -121,7 +121,7 @@ def generate_docx_evidence(evidence_data, out_path=None, out_dir="./evidence_out
     _set_table_borders(meta_table)
 
     meta_rows = [
-        ("Target API Host / Base URL", evidence_data.get("target_host", "http://localhost:5001")),
+        ("Target API Host / Base URL", evidence_data.get("target_host") or "N/A"),
         ("Postman Test Collection", evidence_data.get("collection_name", "Test Collection")),
         ("Linked User Story", f"{evidence_data.get('story', {}).get('external_key', '')} — {evidence_data.get('story', {}).get('title', '')}"),
         ("Execution Engine", evidence_data.get("telemetry", {}).get("runner", "HttpRunner")),
