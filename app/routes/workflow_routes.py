@@ -284,3 +284,137 @@ def workflow_sla(workflow_id):
 @require_permission("workflow.read")
 def agent_runs():
     return ok({"agent_runs": list_agent_runs()})
+
+
+@workflow_bp.route("/workflows/<workflow_id>/provide-postman", methods=["POST"])
+@require_auth
+def provide_postman(workflow_id):
+    from app.repositories.workflow_repo import get_run, update_run
+    from app.tools.api_runner.collection_parser import parse_postman_collection
+    from app.repositories.evidence_repo import decide_approval
+    from app.services.workflow_runner import dispatch_resume
+
+    run = get_run(workflow_id)
+    if not run:
+        return fail("NOT_FOUND", "Workflow run not found", 404)
+
+    collection_dict = None
+    file_name = "postman_collection.json"
+
+    # 1. Check if multipart file was uploaded
+    if "file" in request.files:
+        uploaded_file = request.files["file"]
+        if uploaded_file and uploaded_file.filename:
+            file_name = uploaded_file.filename
+            try:
+                content_bytes = uploaded_file.read()
+                raw_content = content_bytes.decode("utf-8")
+                collection_dict = json.loads(raw_content)
+            except Exception as e:
+                return fail("VALIDATION_ERROR", f"Failed to parse uploaded JSON file: {str(e)}", 400)
+
+    # 2. Check if JSON payload was provided
+    if not collection_dict:
+        body = request.get_json(silent=True) or {}
+        if body.get("collection"):
+            collection_dict = body["collection"]
+            if isinstance(collection_dict, str):
+                try:
+                    collection_dict = json.loads(collection_dict)
+                except Exception as e:
+                    return fail("VALIDATION_ERROR", f"Invalid collection JSON string: {str(e)}", 400)
+        elif body.get("collection_json"):
+            try:
+                collection_dict = json.loads(body["collection_json"])
+            except Exception as e:
+                return fail("VALIDATION_ERROR", f"Invalid collection_json: {str(e)}", 400)
+        if body.get("file_name"):
+            file_name = body["file_name"]
+
+    if not collection_dict or not isinstance(collection_dict, dict):
+        return fail("VALIDATION_ERROR", "A valid Postman collection JSON object or file is required", 400)
+
+    # Validate and parse endpoints
+    parsed_endpoints = parse_postman_collection(collection_dict)
+    service_name = collection_dict.get("info", {}).get("name", "ApiService")
+
+    contracts = []
+    for ep in parsed_endpoints:
+        contracts.append({
+            "service": service_name,
+            "method": ep.get("method", "GET").upper(),
+            "path": ep.get("path", "/"),
+            "headers": ep.get("headers", {}),
+            "sample_request": ep.get("body"),
+            "sample_response": ep.get("response_example"),
+            "expected_status_code": ep.get("expected_status_code", 200),
+            "source": "POSTMAN_COLLECTION",
+            "from_collection": True
+        })
+
+    # Save to local tmp/collections
+    collection_dir = os.path.join(".", "tmp", "collections")
+    os.makedirs(collection_dir, exist_ok=True)
+    collection_file = os.path.join(collection_dir, f"{workflow_id}_collection.json")
+    try:
+        with open(collection_file, "w", encoding="utf-8") as f:
+            json.dump(collection_dict, f, indent=2)
+    except Exception as e:
+        print(f"[Workflow] Warning: could not write collection to file: {e}")
+
+    # Optionally ingest into knowledge base if project exists
+    state = run.get("state_json") or {}
+    project_id = run.get("project_id") or state.get("project_id") or (state.get("project") or {}).get("id")
+    if project_id:
+        try:
+            from app.rag.ingestion.indexer import ingest_document
+            content_bytes = json.dumps(collection_dict).encode("utf-8")
+            project_name = (state.get("project") or {}).get("name", f"proj-{project_id}")
+            ingest_document(
+                project_id=project_id,
+                file_name=file_name,
+                content_bytes=content_bytes,
+                doc_type="postman_collection",
+                version="v1",
+                uploaded_by=getattr(g, "user_id", None),
+                project_name=project_name
+            )
+        except Exception as e:
+            print(f"[Workflow] Non-fatal: Document ingestion into knowledge base skipped: {e}")
+
+    # Update workflow state
+    state["postman_collection"] = collection_dict
+    state["collection_path"] = collection_file
+    if contracts:
+        state["api_contracts"] = contracts
+    state["postman_required"] = False
+    state["current_stage"] = "EVIDENCE_GENERATION"
+    state["status"] = "RUNNING"
+
+    # Resolve pending POSTMAN_COLLECTION_REQUIRED checkpoint if open
+    pending_app = query(
+        "SELECT uuid FROM approvals WHERE workflow_id=%s AND stage='POSTMAN_COLLECTION_REQUIRED' AND decision='PENDING' ORDER BY requested_at DESC LIMIT 1",
+        (workflow_id,), fetchone=True
+    )
+    if pending_app:
+        decide_approval(pending_app["uuid"], "APPROVED", getattr(g, "user_id", None), "Postman collection provided by user")
+
+    # Persist updated state
+    update_run(workflow_id, "RUNNING", "EVIDENCE_GENERATION", state)
+    audit("workflow_resume_postman", user_id=getattr(g, "user_id", None),
+          workflow_id=workflow_id, status="RESUMED",
+          metadata={"endpoints_count": len(parsed_endpoints), "stage": "EVIDENCE_GENERATION"})
+
+    # Resume the orchestrator in the background into EVIDENCE_GENERATION
+    task_id, resume_status = dispatch_resume(workflow_id, "POSTMAN_COLLECTION_REQUIRED")
+
+    return ok({
+        "workflow_id": workflow_id,
+        "status": "RUNNING",
+        "current_stage": "EVIDENCE_GENERATION",
+        "task_id": task_id,
+        "resume_status": resume_status,
+        "endpoints_count": len(parsed_endpoints),
+        "collection_name": service_name
+    }, f"Postman collection provided with {len(parsed_endpoints)} endpoints. Workflow resumed into Evidence Generation.", 200)
+

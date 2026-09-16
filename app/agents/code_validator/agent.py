@@ -3,7 +3,7 @@ from app.agents.base import BaseAgent
 from app.tools.code_analysis.analyzer import get_analyzer
 from app.llm.model_router.router import get_router
 from app.repositories.test_repo import save_code_quality_run_with_issues
-from app.workflows.state_machine import TRACEABILITY
+from app.workflows.state_machine import EVIDENCE_GENERATION
 
 
 class CodeValidatorAgent(BaseAgent):
@@ -30,7 +30,7 @@ class CodeValidatorAgent(BaseAgent):
         state["code_quality"] = {"score": analysis.score, "passed": analysis.passed,
                                  "issues": analysis.issues, "explanation": explanation,
                                  "is_mock": analysis.is_mock}
-        state["current_stage"] = TRACEABILITY
+        state["current_stage"] = EVIDENCE_GENERATION
         self._record(workflow_id, "code_validation", tool_name="code_analyzer",
                      output_summary={"score": analysis.score, "passed": analysis.passed})
         return state

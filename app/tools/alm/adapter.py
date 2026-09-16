@@ -97,7 +97,78 @@ def generate_alm_payload(provider, story_external_key, evidence_key, narrative="
         }
 
 
+class JiraAlmAdapter(AlmAdapter):
+    provider = "jira"
+
+    def attach_evidence(self, story_external_key, evidence, idempotency_key):
+        import os
+        from app.tools.jira.client import JiraClient
+
+        client = JiraClient()
+        if not client.is_configured():
+            return MockAlmAdapter().attach_evidence(story_external_key, evidence, idempotency_key)
+
+        evidence_key = evidence.get("evidence_key", "EVID-AUTO")
+        project_name = evidence.get("project_name")
+        approval_comment = (
+            evidence.get("approval_comment")
+            or evidence.get("comment")
+            or "Deterministic verification package verified and approved via enterprise governance."
+        )
+        approver_name = evidence.get("approver_name") or "Authorized Reviewer"
+
+        # Locate .docx evidence file strictly in evidence_output
+        out_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "evidence_output"))
+        docx_path = evidence.get("docx_path")
+        if not docx_path or not os.path.isfile(docx_path):
+            candidate = os.path.join(out_dir, f"{evidence_key}.docx")
+            docx_path = candidate if os.path.isfile(candidate) else None
+
+        try:
+            res = client.sync_evidence_package(
+                issue_key=story_external_key,
+                evidence_data=evidence,
+                docx_path=docx_path,
+                approval_comment=approval_comment,
+                approver_name=approver_name,
+            )
+
+            # Delete the temporary .docx from evidence_output now that it is uploaded to Jira
+            if docx_path and os.path.isfile(docx_path):
+                try:
+                    os.remove(docx_path)
+                    print(f"[JiraAlmAdapter] Successfully purged temporary evidence file after Jira upload: {docx_path}")
+                except Exception as del_err:
+                    print(f"[JiraAlmAdapter] Warning: Could not purge {docx_path}: {del_err}")
+
+            return {
+                "status": "SUCCESS",
+                "external_ref": f"JIRA-{story_external_key}-{evidence_key}",
+                "request_id": idempotency_key,
+                "response": res,
+                "is_mock": False,
+            }
+        except Exception as e:
+            print(f"[JiraAlmAdapter] Error syncing evidence to Jira: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "status": "FAILED",
+                "external_ref": f"JIRA-ERROR-{story_external_key}-{evidence_key}",
+                "request_id": idempotency_key,
+                "response": {"error": str(e)},
+                "is_mock": False,
+            }
+
+
 def get_alm_adapter():
+    from app.tools.jira.client import JiraClient
+    try:
+        jira_client = JiraClient()
+        if jira_client.is_configured():
+            return JiraAlmAdapter()
+    except Exception:
+        pass
     return MockAlmAdapter()
 
 

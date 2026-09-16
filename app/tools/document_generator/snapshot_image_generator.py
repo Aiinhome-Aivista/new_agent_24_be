@@ -5,6 +5,7 @@ embedded as evidence pictures directly in audit-grade Microsoft Word (.docx) doc
 """
 import os
 import json
+import re
 from PIL import Image, ImageDraw, ImageFont
 
 
@@ -31,8 +32,15 @@ def generate_postman_snapshot_image(
 
     method = str(method or "GET").upper()
     url = str(url or "")
-    status_code = int(status_code) if status_code else 200
-    duration_ms = int(duration_ms) if duration_ms else 30
+    try:
+        status_code = int(re.search(r'\d+', str(status_code)).group(0)) if status_code and re.search(r'\d+', str(status_code)) else 200
+    except Exception:
+        status_code = 200
+
+    try:
+        duration_ms = int(re.search(r'\d+', str(duration_ms)).group(0)) if duration_ms and re.search(r'\d+', str(duration_ms)) else 30
+    except Exception:
+        duration_ms = 30
 
     # Format Request Body string
     req_text = ""

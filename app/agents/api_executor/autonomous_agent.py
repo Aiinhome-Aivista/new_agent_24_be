@@ -733,15 +733,26 @@ Generate all {len(acceptance_criteria)} executable test scenarios in valid JSON 
         # 2. Retrieve Linked User Story and Acceptance Criteria
         story = None
         acceptance_criteria = []
+        project_name = None
         if story_uuid:
             try:
                 story = get_story(story_uuid)
                 if story:
+                    project_name = story.get("project_name")
                     self._log("REQUIREMENT_RETRIEVAL", f"Linked to User Story [{story.get('external_key')}]: {story.get('title')}")
                     acceptance_criteria = story_acceptance_criteria(story.get("id")) or []
                     self._log("REQUIREMENT_RETRIEVAL", f"Retrieved {len(acceptance_criteria)} acceptance criteria for contract verification.")
             except Exception as ex:
                 self._log("REQUIREMENT_RETRIEVAL", f"Failed to retrieve story: {ex}", level="WARN")
+
+        if not project_name and project_uuid:
+            try:
+                from app.repositories.project_repo import get_project
+                proj = get_project(project_uuid)
+                if proj:
+                    project_name = proj.get("name")
+            except Exception:
+                pass
 
         if not story:
             story = {
@@ -928,6 +939,7 @@ Generate all {len(acceptance_criteria)} executable test scenarios in valid JSON 
         canonical_evidence_payload = {
             "evidence_key": evidence_key,
             "traceability_id": traceability_id,
+            "project_name": project_name,
             "story": {
                 "external_key": story.get("external_key"),
                 "title": story.get("title"),

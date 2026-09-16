@@ -424,9 +424,26 @@ def run_autonomous_verification():
     base_url = (body.get("base_url") or "").strip()
     collection_data = body.get("collection_json")
     collection_name = body.get("collection_name")
-    story_uuid = body.get("story_uuid")
     project_uuid = body.get("project_uuid")
+    story_uuid = body.get("story_uuid")
+    project_name = body.get("project_name")
     is_mock = bool(body.get("is_mock", False))
+
+    if not project_name and story_uuid:
+        try:
+            st = get_story(story_uuid)
+            if st and st.get("project_name"):
+                project_name = st.get("project_name")
+        except Exception:
+            pass
+
+    if not project_name and project_uuid:
+        try:
+            pr = get_project(project_uuid)
+            if pr and pr.get("name"):
+                project_name = pr.get("name")
+        except Exception:
+            pass
 
     # Auto-fallback: check project collections, then bundled Auth Postman collection
     if not collection_data and project_uuid:
@@ -484,6 +501,8 @@ def run_autonomous_verification():
         )
 
         evidence_key = evidence.get("evidence_key")
+        if project_name and not evidence.get("project_name"):
+            evidence["project_name"] = project_name
         _AUTONOMOUS_EVIDENCE_STORE[evidence_key] = evidence
 
         # Generate Word (.docx) package
@@ -576,10 +595,20 @@ def download_evidence_docx(evidence_key):
             else:
                 return fail("NOT_FOUND", "Evidence document not found", 404)
 
+    ev = _AUTONOMOUS_EVIDENCE_STORE.get(evidence_key) or {}
+    proj_name = ev.get("project_name")
+    exec_ts = ev.get("execution_timestamp")
+    from app.tools.jira.client import JiraClient
+    download_filename = JiraClient.generate_evidence_attachment_name(
+        project_name=proj_name,
+        evidence_key=evidence_key,
+        execution_timestamp=exec_ts,
+    )
+
     return send_file(
         file_path,
         as_attachment=True,
-        download_name=f"{evidence_key}.docx",
+        download_name=download_filename,
         mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
 

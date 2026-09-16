@@ -38,6 +38,7 @@ def _initial_state():
         "api_contracts": [{"method": "POST", "path": "/api/payments/authorize",
                            "service": "AuthorizationService"}],
         "capabilities": ["Test Generation", "API Execution"],
+        "postman_collection": {"info": {"name": "Payment API Collection"}},
     }
 
 
@@ -54,7 +55,7 @@ def test_pipeline_runs_execution_and_validation(stub_db):
     orch = Orchestrator()
     state = orch.advance("wf-2", _initial_state())
     state = orch.resume("wf-2", state, sm.TEST_REVIEW)
-    assert state["current_stage"] == sm.EVIDENCE_REVIEW
+    assert state["current_stage"] == sm.ALM_APPROVAL
     # Deterministic tools produced quality values in validation stage (not the LLM).
     assert state["code_quality"]["score"] > 0
 
@@ -64,7 +65,6 @@ def test_pipeline_reaches_alm_approval(stub_db):
     orch = Orchestrator()
     state = orch.advance("wf-3", _initial_state())
     state = orch.resume("wf-3", state, sm.TEST_REVIEW)
-    state = orch.resume("wf-3", state, sm.EVIDENCE_REVIEW)
     assert state["current_stage"] == sm.ALM_APPROVAL
 
 

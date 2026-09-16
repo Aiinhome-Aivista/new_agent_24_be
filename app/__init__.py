@@ -34,6 +34,13 @@ def create_app(config=Config):
     # Check and print database connection status on startup
     check_connection()
 
+    # Automatically clean up any orphaned or historical temporary evidence files on startup
+    try:
+        from app.tools.document_generator.retention import cleanup_old_evidence
+        cleanup_old_evidence()
+    except Exception:
+        pass
+
     for bp in (health_bp, auth_bp, project_bp, workflow_bp, test_bp,
                approval_bp, agent_bp, governance_bp, dashboard_bp, api_execution_bp, jira_bp):
         app.register_blueprint(bp, url_prefix=API_PREFIX)

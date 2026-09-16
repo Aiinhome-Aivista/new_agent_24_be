@@ -96,6 +96,25 @@ def jira_sync_evidence():
     evidence_data = body.get("evidence_data") or _AUTONOMOUS_EVIDENCE_STORE.get(evidence_key) or {}
     comment_note = body.get("comment_note") or "Autonomous test verification completed and authorized."
     approver_name = body.get("approver_name") or "Authorized Lead QA"
+    project_name = body.get("project_name") or evidence_data.get("project_name")
+
+    workflow_id = (body.get("workflow_id") or "").strip()
+
+    if not project_name and issue_key:
+        try:
+            from app.db.connection import query
+            row = query(
+                "SELECT p.name FROM stories s JOIN projects p ON p.id=s.project_id WHERE s.external_key=%s",
+                (issue_key,),
+                fetchone=True
+            )
+            if row and row.get("name"):
+                project_name = row.get("name")
+        except Exception:
+            pass
+
+    if project_name:
+        evidence_data["project_name"] = project_name
 
     if not issue_key:
         return fail("VALIDATION_ERROR", "Jira Story / Issue key is required (e.g. 'SCRUM-40').")
@@ -133,6 +152,43 @@ def jira_sync_evidence():
             _AUTONOMOUS_EVIDENCE_STORE[evidence_key]["jira_synced"] = True
             _AUTONOMOUS_EVIDENCE_STORE[evidence_key]["jira_sync_result"] = sync_result
 
+        # If connected to a workflow run or story, advance the workflow run to COMPLETED / DONE
+        workflow_completed = False
+        completed_wf_id = None
+        try:
+            from app.db.connection import execute, query
+            if workflow_id:
+                execute(
+                    "UPDATE workflow_runs SET status='COMPLETED', current_stage='DONE' WHERE id=%s OR uuid=%s",
+                    (workflow_id, workflow_id)
+                )
+                workflow_completed = True
+                completed_wf_id = workflow_id
+            elif issue_key:
+                wf_row = query(
+                    """
+                    SELECT wr.id, wr.uuid FROM workflow_runs wr
+                    JOIN stories s ON s.id = wr.story_id
+                    WHERE s.external_key=%s AND wr.status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')
+                    ORDER BY wr.created_at DESC LIMIT 1
+                    """,
+                    (issue_key,),
+                    fetchone=True
+                )
+                if wf_row:
+                    target_id = wf_row.get("id") or wf_row.get("uuid")
+                    execute(
+                        "UPDATE workflow_runs SET status='COMPLETED', current_stage='DONE' WHERE id=%s",
+                        (target_id,)
+                    )
+                    workflow_completed = True
+                    completed_wf_id = str(target_id)
+        except Exception as wf_err:
+            print(f"[JiraSync] Notice: could not auto-complete workflow: {wf_err}")
+
+        sync_result["workflow_completed"] = workflow_completed
+        sync_result["workflow_id"] = completed_wf_id or workflow_id or None
+
         audit(
             "jira_evidence_sync",
             user_id=getattr(g, "user_id", None),
@@ -142,6 +198,8 @@ def jira_sync_evidence():
                 "evidence_key": evidence_key,
                 "approver": approver_name,
                 "comment_id": sync_result.get("comment_id"),
+                "workflow_completed": workflow_completed,
+                "workflow_id": sync_result.get("workflow_id"),
             }
         )
 

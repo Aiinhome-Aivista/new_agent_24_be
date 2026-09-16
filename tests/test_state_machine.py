@@ -9,8 +9,8 @@ def test_pipeline_order_and_next():
 
 def test_human_checkpoints():
     assert sm.TEST_REVIEW in sm.HUMAN_CHECKPOINTS
-    assert sm.EVIDENCE_REVIEW in sm.HUMAN_CHECKPOINTS
     assert sm.ALM_APPROVAL in sm.HUMAN_CHECKPOINTS
+    assert sm.POSTMAN_COLLECTION_REQUIRED in sm.HUMAN_CHECKPOINTS
 
 
 def test_full_pipeline_reachable():

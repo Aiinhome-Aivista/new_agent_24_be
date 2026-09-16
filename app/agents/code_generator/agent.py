@@ -23,7 +23,7 @@ Given the test case specification, API contracts, and target language/framework 
 1. Generate complete, executable, clean pytest test functions.
 2. Follow the standard Arrange-Act-Assert (AAA) pattern.
 3. For API endpoint tests, use the provided `client` or `api_client` fixture to send HTTP requests (e.g. `client.post('/api/...', json=payload)` or `client.get('/api/...')`).
-4. Assert HTTP response status codes and expected response body properties/errors.
+4. Assert HTTP response status codes and expected response body properties/errors. For Flask API responses, use `response.get_json()` (or property `response.json`), NOT function call `response.json()`. Access nested payload attributes accurately based on the API response envelope (e.g. `response.get_json().get('data', {}).get('id')`).
 5. NEVER invent non-existent class or module imports (e.g. DO NOT hallucinate `from app.services... import ...` unless explicitly present in codebase context).
 6. Include inline docstrings and comments referencing the Acceptance Criteria.
 
@@ -339,6 +339,44 @@ Generate a complete, executable {framework} test function/method in {lang} that 
                 "tests_count": len(test_code_snippets)
             })
             log_entries.append(f"[{now_str}] [FILE_WRITE] Generated test artifact saved to {evidence_file} ({line_count} lines)")
+
+            # Also generate a conftest.py in evidence_dir if Python so pytest runs out-of-the-box
+            if lang == "python":
+                evidence_conftest = evidence_dir / "conftest.py"
+                if not evidence_conftest.exists():
+                    ws_escaped = str(Path(workspace_path).resolve()).replace("\\", "\\\\") if workspace_path else ""
+                    conftest_code = f'''import sys
+from pathlib import Path
+import pytest
+
+# Ensure project workspace is on sys.path
+workspace_dir = Path(r"{ws_escaped}")
+if str(workspace_dir) and str(workspace_dir) not in sys.path:
+    sys.path.insert(0, str(workspace_dir))
+
+try:
+    from app import app
+    @pytest.fixture
+    def client():
+        app.config.update(TESTING=True)
+        with app.test_client() as test_client:
+            yield test_client
+except Exception:
+    import requests
+    class LiveClient:
+        def __init__(self, base_url="http://127.0.0.1:5001"):
+            self.base_url = base_url
+        def get(self, url, **kwargs):
+            return requests.get(f"{{self.base_url}}{{url}}", **kwargs)
+        def post(self, url, **kwargs):
+            return requests.post(f"{{self.base_url}}{{url}}", **kwargs)
+        def patch(self, url, **kwargs):
+            return requests.patch(f"{{self.base_url}}{{url}}", **kwargs)
+    @pytest.fixture
+    def client():
+        return LiveClient()
+'''
+                    evidence_conftest.write_text(conftest_code, encoding="utf-8")
         except Exception as e:
             log_entries.append(f"[{now_str}] [WARN] Could not write evidence test file: {e}")
 

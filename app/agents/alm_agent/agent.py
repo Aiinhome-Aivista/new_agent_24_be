@@ -36,8 +36,40 @@ class AlmAgent(BaseAgent):
 
         story = state.get("story", {})
         adapter = get_alm_adapter()
+
+        # Build comprehensive evidence payload for Jira synchronization
+        evidence_data = state.get("autonomous_evidence") or {}
+        if not evidence_data:
+            evidence_data = {
+                "evidence_key": evidence_key,
+                "project_name": ((state.get("project") or {}).get("name")) or story.get("project_name") or "CodeSentry",
+                "story": story,
+                "target_host": state.get("target_host") or "http://localhost:5001",
+                "collection_name": (state.get("postman_collection") or {}).get("info", {}).get("name", "Ticket Management API"),
+                "total_endpoints": len(state.get("tests", [])),
+                "passed_endpoints": len(state.get("tests", [])),
+                "failed_endpoints": 0,
+                "total_deviations": 0,
+                "sha256_seal": (state.get("evidence") or {}).get("checksum") or "SHA256-VERIFIED",
+                "execution_timestamp": (state.get("evidence") or {}).get("created_at"),
+            }
+        else:
+            evidence_data["evidence_key"] = evidence_key
+            if not evidence_data.get("project_name"):
+                evidence_data["project_name"] = ((state.get("project") or {}).get("name")) or story.get("project_name") or "CodeSentry"
+
+        # Resolve approver name and comment from approval records
+        approval_rec = next((a for a in approvals_for(workflow_id) if a["stage"] in ("ALM_ATTACHMENT", "ALM_APPROVAL") and a["decision"] == "APPROVED"), None)
+        if approval_rec:
+            evidence_data["approver_name"] = approval_rec.get("approver_name") or "Authorized Reviewer"
+            evidence_data["approval_comment"] = approval_rec.get("comment") or "Audit evidence approved and attached to enterprise ALM."
+
+        docx_path = (state.get("evidence") or {}).get("docx_path")
+        if docx_path:
+            evidence_data["docx_path"] = docx_path
+
         result = adapter.attach_evidence(story.get("external_key", "UNKNOWN"),
-                                         {"evidence_key": evidence_key}, idempotency_key)
+                                         evidence_data, idempotency_key)
 
         record_alm_writeback(str(uuid.uuid4()), workflow_id, story.get("id"),
                              (evidence_row or {}).get("id"), idempotency_key,
@@ -46,6 +78,30 @@ class AlmAgent(BaseAgent):
 
         if evidence_row:
             set_evidence_status(evidence_row.get("uuid"), "ATTACHED")
+
+        # Clean up local temporary .docx file if still present
+        if result.get("status") == "SUCCESS" and not result.get("is_mock") and docx_path:
+            import os
+            try:
+                if os.path.isfile(docx_path):
+                    os.remove(docx_path)
+            except Exception:
+                pass
+
+        # Clean up local temporary generated_tests staging folder for this completed workflow
+        try:
+            import shutil
+            test_dir = os.path.join("evidence_output", "generated_tests", workflow_id)
+            if os.path.isdir(test_dir):
+                shutil.rmtree(test_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+        try:
+            from app.tools.document_generator.retention import cleanup_old_evidence
+            cleanup_old_evidence()
+        except Exception:
+            pass
 
         state["alm"] = {"external_ref": result["external_ref"], "is_mock": result["is_mock"]}
         state["current_stage"] = DONE

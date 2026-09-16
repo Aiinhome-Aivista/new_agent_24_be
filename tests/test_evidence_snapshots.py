@@ -112,9 +112,9 @@ def test_docx_and_html_evidence_snapshots_generation():
     assert "http://localhost:5001/api/user" in full_text
     assert "Internal Database Error" in full_text
 
-    assert "4.1 Comprehensive Test Execution Evidence Snapshots (All Cases)" in full_text
-    assert "TEST CASE #1" in full_text
-    assert "TEST CASE #2" in full_text
+    assert "Comprehensive Test Execution Evidence Snapshots (All Cases)" in full_text
+    assert "POSTMAN API EVIDENCE SNAPSHOT #1" in full_text
+    assert "POSTMAN API EVIDENCE SNAPSHOT #2" in full_text
 
     # 2. Test HTML/PDF report generation with evidence snapshots
     html_path = render_autonomous_evidence_html(evidence_data, out_dir=out_dir)
@@ -211,7 +211,7 @@ def test_all_successful_cases_evidence_snapshots_generation():
             for cell in row.cells:
                 full_text += "\n" + cell.text
 
-    assert "4.1 Comprehensive Test Execution Evidence Snapshots (All Cases)" in full_text
+    assert "Comprehensive Test Execution Evidence Snapshots (All Cases)" in full_text
     assert "VERIFIED CONFORMANT" in full_text
     assert "http://localhost:5001/api/checkout" in full_text
     assert "ORD-7890" in full_text

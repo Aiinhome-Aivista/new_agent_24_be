@@ -42,9 +42,8 @@ STAGE_STATUS = {
     sm.CODE_GENERATION: sm.RUNNING,
     sm.API_EXECUTION: sm.EXECUTING,
     sm.CODE_VALIDATION: sm.VALIDATING,
-    sm.TRACEABILITY: sm.RUNNING,
+    sm.POSTMAN_COLLECTION_REQUIRED: sm.WAITING_FOR_REVIEW,
     sm.EVIDENCE_GENERATION: sm.GENERATING_EVIDENCE,
-    sm.EVIDENCE_REVIEW: sm.WAITING_FOR_APPROVAL,
     sm.ALM_APPROVAL: sm.WAITING_FOR_APPROVAL,
     sm.ALM_ATTACHMENT: sm.RUNNING,
     sm.DONE: sm.COMPLETED,
@@ -59,20 +58,23 @@ class Orchestrator:
         while guard < 30:
             guard += 1
             stage = state.get("current_stage", sm.CREATED)
+            print(f"[ORCHESTRATOR] Advancing workflow {workflow_id[:8]}... Stage: {stage}")
 
             # Terminal / exception
-            if stage == sm.DONE or state.get("status") in sm.EXCEPTION:
+            if stage == sm.DONE or state.get("status") in (sm.COMPLETED, sm.FAILED, sm.CANCELLED):
                 break
 
             # Human checkpoint: create a pending approval and stop.
             if stage in sm.HUMAN_CHECKPOINTS:
+                print(f"[ORCHESTRATOR] Halting at human checkpoint: {stage}")
+                state["status"] = STAGE_STATUS.get(stage, sm.WAITING_FOR_REVIEW)
                 self._open_checkpoint(workflow_id, stage, state)
                 self._persist(workflow_id, state)
                 break
 
             agent = STAGE_AGENTS.get(stage)
-            if agent is None:
-                # Stage with no dedicated agent — advance directly.
+            if not agent:
+                # Direct transition for stages without dedicated agents
                 state["current_stage"] = sm.next_stage(stage)
                 self._persist(workflow_id, state)
                 continue
@@ -92,6 +94,18 @@ class Orchestrator:
                 print(f"[ORCHESTRATOR] Stage {stage} encountered an exception. Status: {state.get('status')}")
                 break
 
+            # STRICT GATE: Halt before EVIDENCE_GENERATION if no Postman collection is provided
+            next_target_stage = state.get("current_stage")
+            if next_target_stage == sm.EVIDENCE_GENERATION or stage == sm.CODE_VALIDATION:
+                if not self._has_postman_collection(workflow_id, state):
+                    print(f"[ORCHESTRATOR] [GATE] No Postman collection provided! Halting before EVIDENCE_GENERATION.")
+                    state["current_stage"] = sm.POSTMAN_COLLECTION_REQUIRED
+                    state["status"] = sm.WAITING_FOR_REVIEW
+                    state["postman_required"] = True
+                    self._open_checkpoint(workflow_id, sm.POSTMAN_COLLECTION_REQUIRED, state)
+                    self._persist(workflow_id, state)
+                    break
+
         self._persist(workflow_id, state)
         return state
 
@@ -102,16 +116,52 @@ class Orchestrator:
             state["status"] = sm.RUNNING
         return self.advance(workflow_id, state)
 
+    def _has_postman_collection(self, workflow_id, state):
+        """Checks if a Postman collection has been provided for this workflow or project."""
+        if state.get("postman_collection") or state.get("collection_json") or state.get("collection_path"):
+            return True
+
+        contracts = state.get("api_contracts", [])
+        if contracts and any(c.get("source") in ("POSTMAN", "POSTMAN_COLLECTION") or c.get("from_collection") for c in contracts):
+            return True
+
+        project_id = state.get("project_id") or (state.get("project") or {}).get("id") or (state.get("story") or {}).get("project_id")
+        if not project_id:
+            story = state.get("story", {})
+            if story.get("uuid"):
+                try:
+                    from app.repositories.project_repo import get_story
+                    st = get_story(story["uuid"])
+                    if st:
+                        project_id = st.get("project_id")
+                except Exception:
+                    pass
+
+        if project_id:
+            try:
+                from app.extensions.db import query
+                doc = query("""
+                    SELECT id FROM knowledge_documents
+                    WHERE project_id = %s AND (doc_type IN ('postman_collection', 'postman') OR (doc_type = 'api_contract' AND title LIKE '%.json'))
+                    LIMIT 1
+                """, (project_id,), fetchone=True)
+                if doc:
+                    return True
+            except Exception:
+                pass
+
+        return False
+
     def _open_checkpoint(self, workflow_id, stage, state):
         import uuid
         stage_to_approval = {
             sm.TEST_PLAN_REVIEW: "TEST_PLAN_REVIEW",
             sm.TEST_REVIEW: "TEST_REVIEW",
-            sm.EVIDENCE_REVIEW: "EVIDENCE_REVIEW",
+            sm.POSTMAN_COLLECTION_REQUIRED: "POSTMAN_COLLECTION_REQUIRED",
             sm.ALM_APPROVAL: "ALM_APPROVAL",
         }
         create_approval(str(uuid.uuid4()), workflow_id, stage_to_approval.get(stage, stage))
-        state["status"] = STAGE_STATUS[stage]
+        state["status"] = STAGE_STATUS.get(stage, sm.WAITING_FOR_REVIEW)
         audit("workflow_transition", workflow_id=workflow_id, agent=self.name,
               status=state["status"], metadata={"checkpoint": stage})
 
