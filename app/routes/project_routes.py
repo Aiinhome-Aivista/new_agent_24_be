@@ -2,7 +2,7 @@
 import uuid as _uuid
 import json
 # pyrefly: ignore [missing-import]
-from flask import Blueprint, request, g
+from flask import Blueprint, request, g, Response
 from app.errors.handlers import ok, fail
 from app.auth.decorators import require_auth, require_permission
 from app.repositories.project_repo import (
@@ -195,6 +195,76 @@ def story_detail(uuid):
         return fail("NOT_FOUND", "Story not found", 404)
     acs = story_acceptance_criteria(s["id"]) if s else []
     return ok({"story": s, "acceptance_criteria": acs})
+
+
+@project_bp.route("/stories/<uuid>/download", methods=["GET"])
+@require_auth
+@require_permission("story.read")
+def download_story(uuid):
+    fmt = (request.args.get("format") or "md").lower()
+    s = get_story(uuid)
+    if not s:
+        return fail("NOT_FOUND", "Story not found", 404)
+    acs = story_acceptance_criteria(s["id"]) if s else []
+
+    key = s.get("external_key") or "STORY"
+    filename_prefix = "".join(c for c in key if c.isalnum() or c in ("-", "_")).strip() or "story"
+
+    if fmt == "json":
+        payload = {
+            "uuid": s.get("uuid"),
+            "external_key": s.get("external_key"),
+            "title": s.get("title"),
+            "description": s.get("description"),
+            "sprint": s.get("sprint"),
+            "status": s.get("status"),
+            "coverage_pct": float(s.get("coverage_pct") or 0.0),
+            "project_key": s.get("project_key"),
+            "project_name": s.get("project_name"),
+            "workflow_id": s.get("workflow_id"),
+            "workflow_status": s.get("workflow_status"),
+            "acceptance_criteria": [
+                {"uuid": ac.get("uuid"), "ac_key": ac.get("ac_key"), "text": ac.get("text")} for ac in acs
+            ]
+        }
+        res = Response(json.dumps(payload, indent=2), mimetype="application/json")
+        res.headers["Content-Disposition"] = f'attachment; filename="{filename_prefix}-story.json"'
+        return res
+    else:
+        lines = [
+            f"# [{s.get('external_key') or 'STORY'}] {s.get('title')}",
+            "",
+            f"- **Project:** {s.get('project_name') or 'N/A'} ({s.get('project_key') or 'N/A'})",
+            f"- **Sprint:** {s.get('sprint') or 'Sprint 1'}",
+            f"- **Status:** {str(s.get('status')).upper()}",
+            f"- **Coverage:** {s.get('coverage_pct') or 0}%",
+        ]
+        if s.get("workflow_id"):
+            lines.append(f"- **Linked Workflow:** `{s.get('workflow_id')}` ({s.get('workflow_status') or 'N/A'})")
+        lines.extend([
+            "",
+            "---",
+            "",
+            "## Description",
+            s.get("description") or "*No description provided.*",
+            "",
+            "---",
+            "",
+            f"## Acceptance Criteria ({len(acs)})",
+            ""
+        ])
+        if not acs:
+            lines.append("*No acceptance criteria specified.*")
+        else:
+            for i, ac in enumerate(acs, 1):
+                ac_k = ac.get("ac_key") or f"AC-{i}"
+                lines.append(f"### {ac_k}")
+                lines.append(ac.get("text") or "")
+                lines.append("")
+        content = "\n".join(lines)
+        res = Response(content, mimetype="text/markdown; charset=utf-8")
+        res.headers["Content-Disposition"] = f'attachment; filename="{filename_prefix}-story.md"'
+        return res
 
 
 @project_bp.route("/stories/<uuid>", methods=["DELETE"])

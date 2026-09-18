@@ -39,6 +39,7 @@ def create_project(uuid, key_code, name, description, target_language="java", ta
 
 def list_stories(project_uuid=None):
     base_sql = """SELECT s.*, p.uuid AS project_uuid, p.key_code AS project_key, p.name AS project_name,
+                         (SELECT COUNT(*) FROM acceptance_criteria ac WHERE ac.story_id=s.id) AS ac_count,
                          (SELECT w.workflow_id FROM workflow_runs w WHERE w.story_id=s.id ORDER BY w.created_at DESC LIMIT 1) AS workflow_id,
                          (SELECT w.status FROM workflow_runs w WHERE w.story_id=s.id ORDER BY w.created_at DESC LIMIT 1) AS workflow_status,
                          (SELECT w.current_stage FROM workflow_runs w WHERE w.story_id=s.id ORDER BY w.created_at DESC LIMIT 1) AS workflow_stage
@@ -50,6 +51,7 @@ def list_stories(project_uuid=None):
 
 def get_story(uuid):
     return query("""SELECT s.*, p.uuid AS project_uuid, p.key_code AS project_key, p.name AS project_name,
+                           (SELECT COUNT(*) FROM acceptance_criteria ac WHERE ac.story_id=s.id) AS ac_count,
                            (SELECT w.workflow_id FROM workflow_runs w WHERE w.story_id=s.id ORDER BY w.created_at DESC LIMIT 1) AS workflow_id,
                            (SELECT w.status FROM workflow_runs w WHERE w.story_id=s.id ORDER BY w.created_at DESC LIMIT 1) AS workflow_status,
                            (SELECT w.current_stage FROM workflow_runs w WHERE w.story_id=s.id ORDER BY w.created_at DESC LIMIT 1) AS workflow_stage
