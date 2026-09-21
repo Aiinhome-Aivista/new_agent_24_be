@@ -144,12 +144,28 @@ class EvidenceGeneratorAgent(BaseAgent):
         out_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "evidence_output"))
         os.makedirs(out_dir, exist_ok=True)
 
+        coverage_matrix = state.get("coverage_matrix") or []
+        if not coverage_matrix and test_cases and acceptance_criteria:
+            try:
+                from app.agents.test_generator.test_validator import AcceptanceCriteriaCoverageValidator
+                cov_report = AcceptanceCriteriaCoverageValidator.validate_coverage(test_cases, acceptance_criteria)
+                coverage_matrix = cov_report.get("coverage_matrix") or []
+            except Exception:
+                pass
+
+        coverage_report = state.get("coverage_report") or (state.get("generation_summary") or {}).get("coverage_report") or {}
+        code_generation = state.get("code_generation") or {}
+
         if api_evidence:
             unified_payload = {
                 **api_evidence,
                 "evidence_key": evidence_key,
                 "project_name": project_name,
                 "story": story,
+                "acceptance_criteria": acceptance_criteria,
+                "coverage_matrix": coverage_matrix,
+                "coverage_report": coverage_report,
+                "code_generation": code_generation,
                 "unit_tests": {
                     "total": len(test_cases),
                     "passed": execution.get("passed", len(test_cases)),
@@ -164,6 +180,10 @@ class EvidenceGeneratorAgent(BaseAgent):
                 "evidence_key": evidence_key,
                 "project_name": project_name,
                 "story": story,
+                "acceptance_criteria": acceptance_criteria,
+                "coverage_matrix": coverage_matrix,
+                "coverage_report": coverage_report,
+                "code_generation": code_generation,
                 "target_host": target_host,
                 "collection_name": "API Test Suite",
                 "summary_recommendation": "API Conforms to Specifications",

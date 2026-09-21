@@ -141,11 +141,21 @@ def download_evidence(workflow_id):
         tests = list_test_cases(workflow_id)
         exec_run = get_execution_run(workflow_id) or {}
         cq_run = get_code_quality_run(workflow_id) or {}
-        story = (run.get("state_json") or {}).get("story") or {}
+        st_json = run.get("state_json") or {}
+        story = st_json.get("story") or {}
+        coverage_matrix = st_json.get("coverage_matrix") or []
+        coverage_report = st_json.get("coverage_report") or (st_json.get("generation_summary") or {}).get("coverage_report") or {}
+        code_generation = st_json.get("code_generation") or {}
+        acceptance_criteria = st_json.get("acceptance_criteria") or (story.get("acceptance_criteria") or [])
+
         unified_payload = {
             "evidence_key": key,
             "project_name": project_name or "Project",
             "story": story,
+            "acceptance_criteria": acceptance_criteria,
+            "coverage_matrix": coverage_matrix,
+            "coverage_report": coverage_report,
+            "code_generation": code_generation,
             "target_host": (run.get("state_json") or {}).get("target_host") or "http://localhost:5001",
             "collection_name": "API Test Suite",
             "summary_recommendation": "API Conforms to Specifications",
@@ -203,12 +213,17 @@ def download_evidence(workflow_id):
             from app.tools.document_generator.docx_generator import generate_docx_evidence
             tests = list_test_cases(workflow_id)
             exec_run = get_execution_run(workflow_id) or {}
+            st_json = run.get("state_json") or {}
             ev_data = {
                 "evidence_key": key,
                 "project_name": project_name or "Project",
-                "story_key": ((run.get("state_json") or {}).get("story") or {}).get("external_key", ""),
-                "story_title": ((run.get("state_json") or {}).get("story") or {}).get("title", ""),
-                "story": (run.get("state_json") or {}).get("story") or {},
+                "story_key": (st_json.get("story") or {}).get("external_key", ""),
+                "story_title": (st_json.get("story") or {}).get("title", ""),
+                "story": st_json.get("story") or {},
+                "acceptance_criteria": st_json.get("acceptance_criteria") or ((st_json.get("story") or {}).get("acceptance_criteria") or []),
+                "coverage_matrix": st_json.get("coverage_matrix") or [],
+                "coverage_report": st_json.get("coverage_report") or (st_json.get("generation_summary") or {}).get("coverage_report") or {},
+                "code_generation": st_json.get("code_generation") or {},
                 "unit_tests": {
                     "total": len(tests),
                     "passed": exec_run.get("passed", len(tests)),
