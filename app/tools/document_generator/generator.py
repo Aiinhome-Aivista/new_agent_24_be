@@ -587,7 +587,44 @@ def render_autonomous_evidence_html(evidence_data, out_path=None, out_dir="./evi
         cq_status = "PASSED" if code_quality_data.get("passed", True) else "FAILED"
         cq_color = "#10b981" if cq_status == "PASSED" else "#ef4444"
 
+        # ── Real code coverage (pytest-cov) — never fabricated ──────────────
+        real_coverage = evidence_data.get("real_code_coverage") or {}
+        real_line_pct = real_coverage.get("line_coverage_pct")
+        real_branch_pct = real_coverage.get("branch_coverage_pct")
+        real_cov_available = real_line_pct is not None and not real_coverage.get("is_mock", True)
+        real_cov_html = ""
+        if real_cov_available:
+            num_stmts = real_coverage.get("num_statements", 0)
+            num_missing = real_coverage.get("num_missing", 0)
+            real_cov_html = f"""
+            <div style="background: rgba(13,61,54,0.35); border: 1px solid rgba(16,185,129,0.3); border-radius: 8px; padding: 12px 16px; margin: 12px 0 16px 0;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <h3 style="font-size: 12.5px; color: #10b981; margin: 0; font-weight: 700;">&#9655; Real Code Execution Coverage (pytest-cov &#8212; actual measurement)</h3>
+                    <span style="font-size: 10px; color: #6ee7b7; font-family: monospace; background: rgba(16,185,129,0.1); padding: 2px 8px; border-radius: 4px;">DETERMINISTIC &#8212; NOT FABRICATED</span>
+                </div>
+                <div class="stat-grid">
+                    <div class="stat-card" style="background: rgba(13,61,54,0.5);">
+                        <span style="font-size: 10px; color: #6ee7b7; text-transform: uppercase; font-weight: 600;">Line Coverage</span>
+                        <div class="stat-val" style="color: #10b981;">{real_line_pct}%</div>
+                    </div>
+                    <div class="stat-card" style="background: rgba(13,61,54,0.5);">
+                        <span style="font-size: 10px; color: #6ee7b7; text-transform: uppercase; font-weight: 600;">Branch Coverage</span>
+                        <div class="stat-val" style="color: #10b981;">{real_branch_pct}%</div>
+                    </div>
+                    <div class="stat-card" style="background: rgba(13,61,54,0.5);">
+                        <span style="font-size: 10px; color: #6ee7b7; text-transform: uppercase; font-weight: 600;">Statements Covered</span>
+                        <div class="stat-val" style="color: #f8fafc;">{num_stmts - num_missing}/{num_stmts}</div>
+                    </div>
+                    <div class="stat-card" style="background: rgba(13,61,54,0.5);">
+                        <span style="font-size: 10px; color: #6ee7b7; text-transform: uppercase; font-weight: 600;">Missed Lines</span>
+                        <div class="stat-val" style="color: {'#ef4444' if num_missing > 0 else '#10b981'};">{num_missing}</div>
+                    </div>
+                </div>
+            </div>
+            """
+
         cov_rows_html = "".join([
+
             f"""<tr>
                 <td style="padding: 8px 10px; border-bottom: 1px solid #334155; font-family: monospace; color: #f97316; font-weight: 700; width: 14%;">{_html.escape(str(item.get('ac_key', f'AC-{idx+1}')))}</td>
                 <td style="padding: 8px 10px; border-bottom: 1px solid #334155; color: #cbd5e1; font-size: 11.5px; width: 50%;">{_html.escape(str(item.get('requirement') or item.get('full_text') or ''))}</td>
@@ -703,8 +740,8 @@ def render_autonomous_evidence_html(evidence_data, out_path=None, out_dir="./evi
         <div style="margin: 28px 0 20px 0; border-top: 1px solid #334155; padding-top: 20px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
                 <div>
-                    <h2 style="font-size: 16px; color: #f8fafc; margin: 0;">Unit Test Suite, Code Coverage & Quality Verification</h2>
-                    <p style="margin: 2px 0 0 0; color: #94a3b8; font-size: 11.5px;">Automated unit test execution, 100% Acceptance Criteria coverage, and static code quality gate.</p>
+                    <h2 style="font-size: 16px; color: #f8fafc; margin: 0;">Unit Test Suite, Code Coverage &amp; Quality Verification</h2>
+                    <p style="margin: 2px 0 0 0; color: #94a3b8; font-size: 11.5px;">Automated unit test execution, Acceptance Criteria specification coverage, real code coverage (pytest-cov), and static code quality gate.</p>
                 </div>
                 <span style="background: rgba(56,189,248,0.15); color: #38bdf8; border: 1px solid rgba(56,189,248,0.3); padding: 3px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; font-family: monospace;">{target_framework.upper()} SUITE VERIFIED</span>
             </div>
@@ -718,7 +755,7 @@ def render_autonomous_evidence_html(evidence_data, out_path=None, out_dir="./evi
                     <div class="stat-val" style="color: #10b981;">{ut_passed}/{ut_total} Passed</div>
                 </div>
                 <div class="stat-card">
-                    <span style="font-size: 10px; color: #94a3b8; text-transform: uppercase; font-weight: 600;">AC Code Coverage</span>
+                    <span style="font-size: 10px; color: #94a3b8; text-transform: uppercase; font-weight: 600;">Spec. AC Coverage</span>
                     <div class="stat-val" style="color: #10b981;">{coverage_pct}%</div>
                 </div>
                 <div class="stat-card">
@@ -726,6 +763,7 @@ def render_autonomous_evidence_html(evidence_data, out_path=None, out_dir="./evi
                     <div class="stat-val" style="color: #38bdf8;">{cq_score} / 100 ({cq_status})</div>
                 </div>
             </div>
+            {real_cov_html}
 
             {cov_matrix_section_html}
 

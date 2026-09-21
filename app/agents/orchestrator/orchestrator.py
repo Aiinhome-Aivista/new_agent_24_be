@@ -3,6 +3,12 @@ TDD Test Evidence Orchestrator. Creates the plan, maintains workflow state, rout
 specialist agents, stops at human checkpoints, enforces guardrails, and persists every
 transition. It never fabricates results, invents requirements, or writes to ALM without
 approval.
+
+LangGraph Integration:
+    When langgraph is installed, workflow execution is routed through the compiled
+    LangGraph StateGraph (app/workflows/langgraph_workflow.py). This provides proper
+    state management, conditional edge routing, and graph visualization.
+    Falls back transparently to the existing while-loop if langgraph is unavailable.
 """
 from app.agents.requirement_analyzer.agent import RequirementAnalyzerAgent
 from app.agents.service_planner.agent import ServicePlannerAgent
@@ -17,6 +23,16 @@ from app.repositories.workflow_repo import update_run
 from app.repositories.evidence_repo import create_approval
 from app.audit.audit_log import record as audit
 from app.workflows import state_machine as sm
+
+# Attempt to load LangGraph workflow at import time (non-blocking)
+_langgraph_workflow = None
+try:
+    from app.workflows.langgraph_workflow import get_workflow_graph
+    _langgraph_workflow = get_workflow_graph()
+except Exception as _lg_err:
+    print(f"[Orchestrator] LangGraph not available: {_lg_err}. Using built-in state machine loop.")
+    _langgraph_workflow = None
+
 
 # Stage -> agent (stages not present are advanced directly, e.g. TEST_PLANNING folds into generation)
 STAGE_AGENTS = {
@@ -54,6 +70,62 @@ class Orchestrator:
     name = "orchestrator"
 
     def advance(self, workflow_id, state):
+        """
+        Advance the workflow from its current stage.
+
+        Priority:
+        1. LangGraph StateGraph (if langgraph installed and graph compiled)
+        2. Built-in while-loop state machine (always-available fallback)
+        """
+        # ── LangGraph path ────────────────────────────────────────────────
+        graph = _langgraph_workflow
+        if graph is not None:
+            return self._advance_via_langgraph(workflow_id, state, graph)
+
+        # ── Fallback: built-in while-loop ─────────────────────────────────
+        return self._advance_via_loop(workflow_id, state)
+
+    def _advance_via_langgraph(self, workflow_id, state, graph):
+        """Execute workflow stages using the compiled LangGraph StateGraph."""
+        print(f"[ORCHESTRATOR][LangGraph] Advancing workflow {workflow_id[:8]}...")
+        try:
+            # Inject workflow_id into state so nodes can access it
+            state["workflow_id"] = workflow_id
+
+            # Determine entry point based on current stage
+            stage = state.get("current_stage", sm.CREATED)
+
+            # Map stage to the LangGraph entry node name
+            stage_to_entry = {
+                sm.CREATED: "requirement_analysis",
+                sm.REQUIREMENT_ANALYSIS: "requirement_analysis",
+                sm.SERVICE_PLANNING: "service_planning",
+                sm.TEST_PLANNING: "test_planning",
+                sm.TEST_GENERATION: "test_generation",
+                sm.CODE_GENERATION: "code_generation",
+                sm.API_EXECUTION: "api_execution",
+                sm.CODE_VALIDATION: "code_validation",
+                sm.EVIDENCE_GENERATION: "evidence_generation",
+                sm.ALM_ATTACHMENT: "alm_attachment",
+            }
+            entry_node = stage_to_entry.get(stage)
+
+            if not entry_node:
+                # Stage is a checkpoint or unknown — fall back to loop
+                print(f"[ORCHESTRATOR][LangGraph] No entry node for stage {stage}, using loop fallback.")
+                return self._advance_via_loop(workflow_id, state)
+
+            # Invoke the graph from the correct node
+            result_state = graph.invoke(state)
+            self._persist(workflow_id, result_state)
+            return result_state
+
+        except Exception as e:
+            print(f"[ORCHESTRATOR][LangGraph] Error during graph execution: {e}. Falling back to loop.")
+            return self._advance_via_loop(workflow_id, state)
+
+    def _advance_via_loop(self, workflow_id, state):
+        """Original while-loop state machine — always-available fallback."""
         guard = 0
         while guard < 30:
             guard += 1

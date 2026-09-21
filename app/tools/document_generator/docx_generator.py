@@ -298,11 +298,18 @@ def generate_docx_evidence(evidence_data, out_path=None, out_dir="./evidence_out
         cq_score = code_quality_data.get("score", 92.0)
         cq_status = "PASSED" if code_quality_data.get("passed", True) else "FAILED"
 
+        # ── Real Code Coverage metrics (from pytest-cov — never fabricated) ──
+        real_coverage = evidence_data.get("real_code_coverage") or {}
+        real_line_pct = real_coverage.get("line_coverage_pct")
+        real_branch_pct = real_coverage.get("branch_coverage_pct")
+        real_cov_available = real_line_pct is not None and not real_coverage.get("is_mock", True)
+
+        # Row 1: Unit test execution metrics table (4 cols)
         ut_metrics_table = doc.add_table(rows=2, cols=4)
         ut_metrics_table.alignment = WD_TABLE_ALIGNMENT.CENTER
         _set_table_borders(ut_metrics_table)
 
-        ut_headers = ["Unit Tests Generated", "Unit Tests Passed", "AC Code Coverage", "Code Quality Score"]
+        ut_headers = ["Unit Tests Generated", "Unit Tests Passed", "Spec. AC Coverage", "Code Quality Score"]
         for j, h in enumerate(ut_headers):
             c = ut_metrics_table.cell(0, j)
             _set_cell_shading(c, "0F172A")
@@ -327,6 +334,40 @@ def generate_docx_evidence(evidence_data, out_path=None, out_dir="./evidence_out
                 r.font.color.rgb = RGBColor(59, 130, 246)
             else:
                 r.font.color.rgb = RGBColor(15, 23, 42)
+
+        # Row 2: Real Code Coverage table (only when pytest-cov produced real data)
+        if real_cov_available:
+            doc.add_paragraph()  # spacer
+            p_rc = doc.add_paragraph()
+            p_rc.paragraph_format.space_before = Pt(8)
+            r_rc = p_rc.add_run("Real Code Execution Coverage (from pytest-cov — actual measurement):")
+            r_rc.font.bold = True
+            r_rc.font.size = Pt(9.5)
+            r_rc.font.color.rgb = RGBColor(15, 118, 110)  # teal
+
+            rc_table = doc.add_table(rows=2, cols=3)
+            rc_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+            _set_table_borders(rc_table)
+            rc_headers = ["Statement/Line Coverage", "Branch Coverage", "Uncovered Statements"]
+            num_missing = real_coverage.get("num_missing", 0)
+            rc_vals = [f"{real_line_pct}%", f"{real_branch_pct}%", str(num_missing)]
+            for j, h in enumerate(rc_headers):
+                hc = rc_table.cell(0, j)
+                _set_cell_shading(hc, "0D3D36")
+                hp = hc.paragraphs[0]
+                hp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                hr = hp.add_run(h)
+                hr.font.bold = True
+                hr.font.size = Pt(8.5)
+                hr.font.color.rgb = RGBColor(209, 250, 229)
+            for j, val in enumerate(rc_vals):
+                vc = rc_table.cell(1, j)
+                vp = vc.paragraphs[0]
+                vp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                vr = vp.add_run(val)
+                vr.font.bold = True
+                vr.font.size = Pt(12)
+                vr.font.color.rgb = RGBColor(16, 185, 129) if j < 2 else RGBColor(239, 68, 68)
 
         # 3.1 Acceptance Criteria Coverage Matrix Table
         if cov_matrix:

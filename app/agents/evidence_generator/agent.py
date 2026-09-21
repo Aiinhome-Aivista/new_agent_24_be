@@ -85,7 +85,7 @@ class EvidenceGeneratorAgent(BaseAgent):
             ws_colls = [
                 os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "ticket-management.postman_collection.json")),
                 os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "ticket-management.postman_collection.json")),
-                "c:/Users/ADMIN/Desktop/Agent-24/ticket-management.postman_collection.json",
+                os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..", "ticket-management.postman_collection.json")),
             ]
             for wc in ws_colls:
                 if os.path.isfile(wc):

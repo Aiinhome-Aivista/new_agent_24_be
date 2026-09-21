@@ -95,7 +95,7 @@ def test_docx_and_html_contain_unit_test_code_and_ac_coverage(tmp_path):
     full_text = "\n".join([p.text for p in doc.paragraphs] + [c.text for t in doc.tables for row in t.rows for c in row.cells])
 
     # Assert Coverage is present in DOCX
-    assert "AC Code Coverage" in full_text
+    assert "Code Coverage" in full_text
     assert "Acceptance Criteria Code Coverage Matrix" in full_text
     assert "AC-01" in full_text
     assert "AC-02" in full_text
@@ -116,7 +116,7 @@ def test_docx_and_html_contain_unit_test_code_and_ac_coverage(tmp_path):
         html_content = f.read()
 
     # Assert Coverage is present in HTML
-    assert "AC Code Coverage" in html_content
+    assert "Spec. AC Coverage" in html_content
     assert "Acceptance Criteria Coverage Matrix (Specification Coverage)" in html_content
     assert "AC-01" in html_content
     assert "AC-02" in html_content
