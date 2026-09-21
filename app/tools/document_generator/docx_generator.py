@@ -277,7 +277,6 @@ def generate_docx_evidence(evidence_data, out_path=None, out_dir="./evidence_out
     # Section 3: Unit Test Suite, Code Coverage & Quality Verification
     unit_tests = evidence_data.get("unit_tests") or {}
     test_cases_list = unit_tests.get("test_cases") or evidence_data.get("tests") or []
-    code_quality_data = evidence_data.get("code_quality") or {}
     code_gen_data = evidence_data.get("code_generation") or {}
     target_lang = code_gen_data.get("target_language") or (test_cases_list[0].get("target_language") if test_cases_list else "python")
     target_framework = code_gen_data.get("target_framework") or (test_cases_list[0].get("framework") if test_cases_list else "pytest")
@@ -288,15 +287,13 @@ def generate_docx_evidence(evidence_data, out_path=None, out_dir="./evidence_out
     covered_acs = cov_rep.get("covered_acceptance_criteria") or sum(1 for c in cov_matrix if c.get("covered"))
     coverage_pct = cov_rep.get("coverage_pct") or (round((covered_acs / total_acs * 100), 1) if total_acs > 0 else 100.0)
 
-    if test_cases_list or code_quality_data or cov_matrix:
-        h_unit = doc.add_heading("3. Unit Test Suite, Code Coverage & Quality Verification", level=2)
+    if test_cases_list or cov_matrix:
+        h_unit = doc.add_heading("3. Unit Test Suite & Code Coverage Verification", level=2)
         h_unit.paragraph_format.space_before = Pt(14)
         h_unit.paragraph_format.space_after = Pt(6)
 
         ut_total = unit_tests.get("total", len(test_cases_list))
         ut_passed = unit_tests.get("passed", len(test_cases_list))
-        cq_score = code_quality_data.get("score", 92.0)
-        cq_status = "PASSED" if code_quality_data.get("passed", True) else "FAILED"
 
         # ── Real Code Coverage metrics (from pytest-cov — never fabricated) ──
         real_coverage = evidence_data.get("real_code_coverage") or {}
@@ -304,12 +301,12 @@ def generate_docx_evidence(evidence_data, out_path=None, out_dir="./evidence_out
         real_branch_pct = real_coverage.get("branch_coverage_pct")
         real_cov_available = real_line_pct is not None and not real_coverage.get("is_mock", True)
 
-        # Row 1: Unit test execution metrics table (4 cols)
-        ut_metrics_table = doc.add_table(rows=2, cols=4)
+        # Row 1: Unit test execution metrics table (3 cols)
+        ut_metrics_table = doc.add_table(rows=2, cols=3)
         ut_metrics_table.alignment = WD_TABLE_ALIGNMENT.CENTER
         _set_table_borders(ut_metrics_table)
 
-        ut_headers = ["Unit Tests Generated", "Unit Tests Passed", "Spec. AC Coverage", "Code Quality Score"]
+        ut_headers = ["Unit Tests Generated", "Unit Tests Passed", "Spec. AC Coverage"]
         for j, h in enumerate(ut_headers):
             c = ut_metrics_table.cell(0, j)
             _set_cell_shading(c, "0F172A")
@@ -320,7 +317,7 @@ def generate_docx_evidence(evidence_data, out_path=None, out_dir="./evidence_out
             r.font.size = Pt(8.5)
             r.font.color.rgb = RGBColor(248, 250, 252)
 
-        ut_vals = [f"{ut_total} Tests", f"{ut_passed}/{ut_total} Passed", f"{coverage_pct}%", f"{cq_score} / 100 ({cq_status})"]
+        ut_vals = [f"{ut_total} Tests", f"{ut_passed}/{ut_total} Passed", f"{coverage_pct}%"]
         for j, val in enumerate(ut_vals):
             c = ut_metrics_table.cell(1, j)
             p = c.paragraphs[0]
@@ -330,8 +327,6 @@ def generate_docx_evidence(evidence_data, out_path=None, out_dir="./evidence_out
             r.font.size = Pt(12)
             if j == 1 or j == 2:
                 r.font.color.rgb = RGBColor(16, 185, 129)
-            elif j == 3:
-                r.font.color.rgb = RGBColor(59, 130, 246)
             else:
                 r.font.color.rgb = RGBColor(15, 23, 42)
 

@@ -203,8 +203,22 @@ def _parse_coverage_json(report_path: str, source_root: str) -> Dict[str, Any]:
         )
         covered_files.append(detail)
 
-        if f_line_pct == 0.0 and f_statements > 0:
-            uncovered_files.append(rel_path)
+    # Filter for application source files (excluding test suites and conftest)
+    app_files = [
+        f for f in covered_files
+        if not any(x in f.file_path.replace("\\", "/").lower() for x in ("/tests/", "tests/", "test_", "conftest.py"))
+    ]
+
+    if app_files:
+        num_statements = sum(f.num_statements for f in app_files)
+        num_missing = sum(f.num_missing for f in app_files)
+        covered_lines = num_statements - num_missing
+        line_pct = round((covered_lines / num_statements * 100) if num_statements > 0 else 0.0, 1)
+
+        num_branches = sum(f.num_branches for f in app_files)
+        num_partial = sum(f.num_partial_branches for f in app_files)
+        covered_branches = num_branches - num_partial
+        branch_pct = round((covered_branches / num_branches * 100) if num_branches > 0 else 0.0, 1)
 
     return {
         "line_coverage_pct": line_pct,
@@ -259,7 +273,7 @@ def _identify_scoped_source_files(
                 if fname.endswith(".py") and module_hint in fname.lower():
                     scoped.add(os.path.join(root, fname))
 
-    # If we couldn't identify specific files, include the whole app/ directory
+    # If we couldn't identify specific files, include the whole app/ directory or root python files
     if not scoped:
         app_dir = os.path.join(workspace_path, "app")
         if os.path.isdir(app_dir):
@@ -268,6 +282,14 @@ def _identify_scoped_source_files(
                 for fname in files:
                     if fname.endswith(".py"):
                         scoped.add(os.path.join(root, fname))
+        else:
+            try:
+                for item in os.listdir(workspace_path):
+                    fpath = os.path.join(workspace_path, item)
+                    if os.path.isfile(fpath) and item.endswith(".py") and not item.startswith("test_") and item != "conftest.py":
+                        scoped.add(fpath)
+            except Exception:
+                pass
 
     return sorted(scoped)
 
@@ -320,7 +342,7 @@ class PytestCoverageExecutor:
         try:
             subprocess.run(
                 [self.python_exe, "-m", "pytest", "--version"],
-                capture_output=True, timeout=10
+                capture_output=True, timeout=30
             )
         except Exception as e:
             result.error_message = f"pytest not available: {e}"
@@ -332,21 +354,30 @@ class PytestCoverageExecutor:
         coverage_json_path = os.path.join(tmp_dir, "coverage.json")
 
         try:
+            # Resolve workspace path and test file to absolute paths
+            abs_workspace = os.path.abspath(workspace_path) if workspace_path and os.path.isdir(workspace_path) else None
+            abs_test_file = os.path.abspath(test_file_path)
+
             # Determine the source directory to measure coverage on
-            source_dir = workspace_path or os.path.dirname(test_file_path)
+            source_dir = abs_workspace or os.path.dirname(abs_test_file)
             scoped_files = _identify_scoped_source_files(
-                workspace_path or "", relevant_functions or []
+                source_dir, relevant_functions or []
             )
             result.scoped_source_files = scoped_files
 
             # Copy test file to temp dir so it runs in isolation
-            test_filename = os.path.basename(test_file_path)
+            test_filename = os.path.basename(abs_test_file)
             tmp_test_file = os.path.join(tmp_dir, test_filename)
-            shutil.copy2(test_file_path, tmp_test_file)
+            shutil.copy2(abs_test_file, tmp_test_file)
 
             # Copy conftest.py if available
-            test_dir = os.path.dirname(test_file_path)
+            test_dir = os.path.dirname(abs_test_file)
             conftest_src = conftest_path or os.path.join(test_dir, "conftest.py")
+            if not os.path.isfile(conftest_src) and abs_workspace:
+                ws_conftest = os.path.join(abs_workspace, "tests", "conftest.py")
+                if os.path.isfile(ws_conftest):
+                    conftest_src = ws_conftest
+
             if os.path.isfile(conftest_src):
                 shutil.copy2(conftest_src, os.path.join(tmp_dir, "conftest.py"))
 
@@ -372,7 +403,7 @@ class PytestCoverageExecutor:
 
             # Set up subprocess environment — inherit current env + additions
             env = os.environ.copy()
-            env["PYTHONPATH"] = (workspace_path or "") + os.pathsep + env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = source_dir + os.pathsep + env.get("PYTHONPATH", "")
             if extra_env:
                 env.update(extra_env)
 
@@ -387,7 +418,7 @@ class PytestCoverageExecutor:
                 text=True,
                 timeout=self.timeout_seconds,
                 env=env,
-                cwd=workspace_path or tmp_dir,
+                cwd=source_dir,
             )
             elapsed = time.time() - start_ts
 

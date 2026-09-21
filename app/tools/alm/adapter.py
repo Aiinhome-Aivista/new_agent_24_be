@@ -29,7 +29,7 @@ class MockAlmAdapter(AlmAdapter):
         }
 
 
-def generate_alm_payload(provider, story_external_key, evidence_key, narrative="", execution=None, code_quality=None):
+def generate_alm_payload(provider, story_external_key, evidence_key, narrative="", execution=None):
     """
     Generates preview JSON payloads formatted for Jira Cloud, Azure DevOps, or Rally.
     """
@@ -53,7 +53,6 @@ def generate_alm_payload(provider, story_external_key, evidence_key, narrative="
                         "tdd_runner": execution.get("runner", "Newman") if execution else "Newman",
                         "tests_passed": execution.get("passed", 0) if execution else 0,
                         "tests_total": execution.get("total", 0) if execution else 0,
-                        "code_quality_score": code_quality.get("score", 90) if code_quality else 90,
                     }
                 },
                 "xray_execution": {
@@ -91,7 +90,7 @@ def generate_alm_payload(provider, story_external_key, evidence_key, narrative="
                 {
                     "op": "add",
                     "path": "/fields/System.History",
-                    "value": f"<div><strong>TDD Intelligence Agent:</strong> Verified test evidence attached.<br/><ul><li>Total Tests: {execution.get('total', 0) if execution else 0}</li><li>Pass Rate: 100%</li><li>Code Quality: {code_quality.get('score', 90) if code_quality else 90}/100</li></ul></div>"
+                    "value": f"<div><strong>TDD Intelligence Agent:</strong> Verified test evidence attached.<br/><ul><li>Total Tests: {execution.get('total', 0) if execution else 0}</li><li>Pass Rate: 100%</li></ul></div>"
                 }
             ]
         }

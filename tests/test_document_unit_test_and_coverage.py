@@ -82,7 +82,6 @@ def test_docx_and_html_contain_unit_test_code_and_ac_coverage(tmp_path):
             "passed": 2,
             "failed": 0,
         },
-        "code_quality": {"score": 96.0, "passed": True},
         "results": [],
         "deviations": [],
     }

@@ -137,11 +137,10 @@ def download_evidence(workflow_id):
                 return send_file(html_file, mimetype="text/html", as_attachment=False)
             return send_file(html_file, mimetype="text/html", as_attachment=True, download_name=html_download_name)
         # Generate on the fly if needed
-        from app.repositories.test_repo import list_test_cases, get_execution_run, get_code_quality_run
+        from app.repositories.test_repo import list_test_cases, get_execution_run
         from app.tools.document_generator.generator import render_autonomous_evidence_html
         tests = list_test_cases(workflow_id)
         exec_run = get_execution_run(workflow_id) or {}
-        cq_run = get_code_quality_run(workflow_id) or {}
         st_json = run.get("state_json") or {}
         auto_ev = st_json.get("autonomous_evidence") or {}
         story = st_json.get("story") or auto_ev.get("story") or {}
@@ -177,7 +176,6 @@ def download_evidence(workflow_id):
                 "test_cases": tests,
             },
             "tests": tests,
-            "code_quality": cq_run or auto_ev.get("code_quality") or {"score": 92.0, "passed": True},
             "sha256_seal": latest.get("checksum_sha256") or auto_ev.get("sha256_seal") or "SHA256-VERIFIED",
             "execution_timestamp": str(created_at),
         }
@@ -189,7 +187,7 @@ def download_evidence(workflow_id):
 
     elif fmt == "json":
         import json as _json
-        from app.repositories.test_repo import list_test_cases, get_execution_run, get_code_quality_run
+        from app.repositories.test_repo import list_test_cases, get_execution_run
         bundle = {
             "evidence_key": key,
             "workflow_id": workflow_id,
@@ -197,7 +195,6 @@ def download_evidence(workflow_id):
             "story": (run.get("state_json") or {}).get("story") or {},
             "test_cases": list_test_cases(workflow_id),
             "execution": get_execution_run(workflow_id),
-            "code_quality": get_code_quality_run(workflow_id),
             "narrative": latest.get("narrative"),
             "generated_at": latest.get("created_at"),
         }
@@ -236,6 +233,7 @@ def download_evidence(workflow_id):
                 "coverage_matrix": coverage_matrix,
                 "coverage_report": coverage_report,
                 "code_generation": code_generation,
+                "real_code_coverage": autonomous_ev.get("real_code_coverage") or st_json.get("real_code_coverage") or {},
                 "target_host": st_json.get("target_host") or autonomous_ev.get("target_host") or "http://localhost:5001",
                 "collection_name": autonomous_ev.get("collection_name") or "API Test Suite",
                 "summary_recommendation": autonomous_ev.get("summary_recommendation") or "API Conforms to Specifications",
@@ -255,7 +253,6 @@ def download_evidence(workflow_id):
                     "test_cases": tests,
                 },
                 "tests": tests,
-                "code_quality": get_code_quality_run(workflow_id) or {"score": 92.0, "passed": True},
                 "sha256_seal": latest.get("checksum_sha256") or autonomous_ev.get("sha256_seal") or "SHA256-VERIFIED",
                 "execution_timestamp": str(created_at),
                 "telemetry": autonomous_ev.get("telemetry") or {"runner": "HttpRunner", "is_mock": False},
@@ -283,7 +280,7 @@ def download_evidence(workflow_id):
 @require_permission("workflow.read")
 def alm_preview(workflow_id):
     from app.tools.alm.adapter import generate_alm_payload
-    from app.repositories.test_repo import get_execution_run, get_code_quality_run
+    from app.repositories.test_repo import get_execution_run
     provider = request.args.get("provider", "azure_devops")
     run = get_run(workflow_id)
     if not run:
@@ -306,7 +303,6 @@ def alm_preview(workflow_id):
         evidence_key,
         narrative,
         get_execution_run(workflow_id),
-        get_code_quality_run(workflow_id)
     )
     return ok({"preview": preview})
 

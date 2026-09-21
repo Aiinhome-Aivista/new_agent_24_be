@@ -55,15 +55,6 @@ def render_evidence(evidence_key, story, test_cases, execution, code_quality, na
                      f"Failed {execution.get('failed')}")
     else:
         lines.append("- No API execution recorded for this workflow.")
-    lines += ["", "## Code Quality"]
-    if code_quality:
-        mock = " (MOCK)" if code_quality.get("is_mock") else ""
-        lines.append(f"- Analyzer: {code_quality.get('analyzer')}{mock} · "
-                     f"Score {code_quality.get('score')} · "
-                     f"{'PASS' if code_quality.get('passed') else 'FAIL'}")
-    else:
-        lines.append("- No code quality run recorded.")
-
     if narrative:
         lines += ["", "## Executive Narrative", narrative]
 
@@ -75,20 +66,18 @@ def render_evidence(evidence_key, story, test_cases, execution, code_quality, na
 
     # Also render companion HTML report
     html_path = os.path.join(out_dir, f"{evidence_key}.html")
-    html_content = render_evidence_html(evidence_key, story, test_cases, execution, code_quality, narrative, checksum)
+    html_content = render_evidence_html(evidence_key, story, test_cases, execution, narrative, checksum)
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(html_content)
 
     return path, checksum
 
 
-def render_evidence_html(evidence_key, story, test_cases, execution, code_quality, narrative="", checksum=""):
+def render_evidence_html(evidence_key, story, test_cases, execution, narrative="", checksum=""):
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     exec_total = execution.get("total", 0) if execution else 0
     exec_passed = execution.get("passed", 0) if execution else 0
     exec_failed = execution.get("failed", 0) if execution else 0
-    cq_score = code_quality.get("score", "N/A") if code_quality else "N/A"
-    cq_passed = code_quality.get("passed", False) if code_quality else True
 
     cov_matrix = _get_or_derive_coverage_matrix({"story": story}, test_cases)
     cov_rows = "".join([
@@ -247,10 +236,6 @@ def render_evidence_html(evidence_key, story, test_cases, execution, code_qualit
             <div class="stat-card">
                 <span style="font-size: 11px; color: #94a3b8; text-transform: uppercase; font-weight: 600;">API Execution Pass Rate</span>
                 <div class="stat-val" style="color: #10b981;">{exec_passed}/{exec_total} Passed</div>
-            </div>
-            <div class="stat-card">
-                <span style="font-size: 11px; color: #94a3b8; text-transform: uppercase; font-weight: 600;">Code Quality Score</span>
-                <div class="stat-val" style="color: {'#10b981' if cq_passed else '#f43f5e'};">{cq_score} / 100</div>
             </div>
         </div>
 
@@ -580,12 +565,9 @@ def render_autonomous_evidence_html(evidence_data, out_path=None, out_dir="./evi
     coverage_pct = cov_rep.get("coverage_pct") or (round((covered_acs / total_acs * 100), 1) if total_acs > 0 else 100.0)
 
     unit_test_section_html = ""
-    if test_cases_list or code_quality_data or cov_matrix:
+    if test_cases_list or cov_matrix:
         ut_total = unit_tests.get("total", len(test_cases_list))
         ut_passed = unit_tests.get("passed", len(test_cases_list))
-        cq_score = code_quality_data.get("score", 92.0)
-        cq_status = "PASSED" if code_quality_data.get("passed", True) else "FAILED"
-        cq_color = "#10b981" if cq_status == "PASSED" else "#ef4444"
 
         # ── Real code coverage (pytest-cov) — never fabricated ──────────────
         real_coverage = evidence_data.get("real_code_coverage") or {}
@@ -740,8 +722,8 @@ def render_autonomous_evidence_html(evidence_data, out_path=None, out_dir="./evi
         <div style="margin: 28px 0 20px 0; border-top: 1px solid #334155; padding-top: 20px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
                 <div>
-                    <h2 style="font-size: 16px; color: #f8fafc; margin: 0;">Unit Test Suite, Code Coverage &amp; Quality Verification</h2>
-                    <p style="margin: 2px 0 0 0; color: #94a3b8; font-size: 11.5px;">Automated unit test execution, Acceptance Criteria specification coverage, real code coverage (pytest-cov), and static code quality gate.</p>
+                    <h2 style="font-size: 16px; color: #f8fafc; margin: 0;">Unit Test Suite &amp; Code Coverage Verification</h2>
+                    <p style="margin: 2px 0 0 0; color: #94a3b8; font-size: 11.5px;">Automated unit test execution, Acceptance Criteria specification coverage, and real code coverage (pytest-cov).</p>
                 </div>
                 <span style="background: rgba(56,189,248,0.15); color: #38bdf8; border: 1px solid rgba(56,189,248,0.3); padding: 3px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; font-family: monospace;">{target_framework.upper()} SUITE VERIFIED</span>
             </div>
@@ -757,10 +739,6 @@ def render_autonomous_evidence_html(evidence_data, out_path=None, out_dir="./evi
                 <div class="stat-card">
                     <span style="font-size: 10px; color: #94a3b8; text-transform: uppercase; font-weight: 600;">Spec. AC Coverage</span>
                     <div class="stat-val" style="color: #10b981;">{coverage_pct}%</div>
-                </div>
-                <div class="stat-card">
-                    <span style="font-size: 10px; color: #94a3b8; text-transform: uppercase; font-weight: 600;">Code Quality Score</span>
-                    <div class="stat-val" style="color: #38bdf8;">{cq_score} / 100 ({cq_status})</div>
                 </div>
             </div>
             {real_cov_html}

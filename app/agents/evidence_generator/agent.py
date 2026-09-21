@@ -1,6 +1,7 @@
 import os
 import json
 import uuid
+import hashlib
 from datetime import datetime, timezone
 from app.agents.base import BaseAgent
 from app.tools.document_generator.generator import render_evidence, render_autonomous_evidence_html
@@ -23,8 +24,6 @@ class EvidenceGeneratorAgent(BaseAgent):
         story = state.get("story", {})
         test_cases = list_test_cases(workflow_id)
         execution = state.get("execution")
-        code_quality = state.get("code_quality")
-
         if not execution or not execution.get("total"):
             db_exec = get_execution_run(workflow_id)
             if db_exec and db_exec.get("total"):
@@ -46,20 +45,7 @@ class EvidenceGeneratorAgent(BaseAgent):
             else:
                 execution = {"runner": "pytest", "total": 0, "passed": 0, "failed": 0, "is_mock": False}
 
-        if not code_quality or not code_quality.get("score"):
-            db_cq = get_code_quality_run(workflow_id)
-            if db_cq and db_cq.get("score"):
-                code_quality = {
-                    "score": db_cq.get("score", 92.0),
-                    "passed": bool(db_cq.get("passed", 1)),
-                    "analyzer": db_cq.get("analyzer", "code_analyzer"),
-                    "is_mock": bool(db_cq.get("is_mock", 0)),
-                }
-            else:
-                code_quality = {"score": 92.0, "passed": True, "analyzer": "code_analyzer", "is_mock": False}
-
         state["execution"] = execution
-        state["code_quality"] = code_quality
 
         # Resolve Postman collection for live API verification
         postman_collection = state.get("postman_collection")
@@ -82,6 +68,42 @@ class EvidenceGeneratorAgent(BaseAgent):
                     pass
 
         if not postman_collection:
+            # Check workspace directory for any postman collections
+            ws_path = state.get("workspace_path")
+            if ws_path and os.path.isdir(ws_path):
+                import glob
+                for f in glob.glob(os.path.join(ws_path, "*.json")):
+                    if "postman" in f.lower() or "collection" in f.lower():
+                        try:
+                            with open(f, "r", encoding="utf-8") as pf:
+                                postman_collection = json.load(pf)
+                                break
+                        except Exception:
+                            pass
+
+        if not postman_collection:
+            # Check knowledge_documents in DB for the project
+            proj_id = (state.get("project") or {}).get("id") or story.get("project_id")
+            if proj_id:
+                try:
+                    from app.extensions.db import query as db_query
+                    kdoc = db_query("""
+                        SELECT kd.id, kd.source FROM knowledge_documents kd
+                        WHERE kd.project_id = %s AND (kd.doc_type IN ('postman_collection', 'api_contract', 'postman', 'openapi') OR kd.title LIKE '%.json')
+                        ORDER BY kd.created_at DESC LIMIT 1
+                    """, (proj_id,), fetchone=True)
+                    if kdoc:
+                        if kdoc.get("source") and os.path.isfile(kdoc["source"]):
+                            with open(kdoc["source"], "r", encoding="utf-8") as pf:
+                                postman_collection = json.load(pf)
+                        else:
+                            kchunks = db_query("SELECT content FROM knowledge_chunks WHERE document_id=%s ORDER BY chunk_index", (kdoc["id"],))
+                            if kchunks:
+                                postman_collection = json.loads("".join([c["content"] for c in kchunks]))
+                except Exception as db_err:
+                    print(f"[EvidenceGenerator] Error checking knowledge documents: {db_err}")
+
+        if not postman_collection:
             ws_colls = [
                 os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "ticket-management.postman_collection.json")),
                 os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "ticket-management.postman_collection.json")),
@@ -97,7 +119,7 @@ class EvidenceGeneratorAgent(BaseAgent):
                         pass
 
         # Target host for live API execution
-        target_host = state.get("target_host") or state.get("base_url") or "http://localhost:5001"
+        target_host = state.get("target_host") or state.get("base_url") or "http://127.0.0.1:5001"
         project_name = ((state.get("project") or {}).get("name")) or "CodeSentry"
         acceptance_criteria = state.get("acceptance_criteria") or (story.get("acceptance_criteria") or [])
 
@@ -155,7 +177,7 @@ class EvidenceGeneratorAgent(BaseAgent):
         try:
             narrative = router.generate_text(
                 "evidence_narrative",
-                prompt=f"Summarize evidence: exec={execution}, quality={code_quality}, api={bool(api_evidence)}",
+                prompt=f"Summarize evidence: exec={execution}, api={bool(api_evidence)}",
                 system="Never alter or invent execution values.").text
         except Exception:
             narrative = f"Audit evidence package generated for {story.get('external_key', 'Story')}. Unit tests and live API verified."
@@ -176,6 +198,8 @@ class EvidenceGeneratorAgent(BaseAgent):
         coverage_report = state.get("coverage_report") or (state.get("generation_summary") or {}).get("coverage_report") or {}
         code_generation = state.get("code_generation") or {}
 
+        real_code_coverage = state.get("real_code_coverage") or {}
+
         if api_evidence:
             unified_payload = {
                 **api_evidence,
@@ -186,6 +210,7 @@ class EvidenceGeneratorAgent(BaseAgent):
                 "coverage_matrix": coverage_matrix,
                 "coverage_report": coverage_report,
                 "code_generation": code_generation,
+                "real_code_coverage": real_code_coverage,
                 "unit_tests": {
                     "total": len(test_cases),
                     "passed": execution.get("passed", len(test_cases)),
@@ -193,7 +218,6 @@ class EvidenceGeneratorAgent(BaseAgent):
                     "test_cases": test_cases,
                 },
                 "tests": test_cases,
-                "code_quality": code_quality,
             }
         else:
             unified_payload = {
@@ -204,11 +228,12 @@ class EvidenceGeneratorAgent(BaseAgent):
                 "coverage_matrix": coverage_matrix,
                 "coverage_report": coverage_report,
                 "code_generation": code_generation,
+                "real_code_coverage": real_code_coverage,
                 "target_host": target_host,
                 "collection_name": "API Test Suite",
                 "summary_recommendation": "API Conforms to Specifications",
                 "decision_status": "Ready for Approval",
-                "decision_summary": f"All {len(test_cases)} automated unit tests passed with code quality score {code_quality.get('score', 92)}/100.",
+                "decision_summary": f"All {len(test_cases)} automated unit tests passed.",
                 "total_endpoints": len(test_cases),
                 "passed_endpoints": len(test_cases),
                 "failed_endpoints": 0,
@@ -222,12 +247,10 @@ class EvidenceGeneratorAgent(BaseAgent):
                     "test_cases": test_cases,
                 },
                 "tests": test_cases,
-                "code_quality": code_quality,
                 "execution_timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
         # Compute deterministic SHA-256 seal directly
-        import hashlib, json
         checksum = hashlib.sha256(json.dumps(unified_payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
         if not unified_payload.get("sha256_seal"):
             unified_payload["sha256_seal"] = checksum

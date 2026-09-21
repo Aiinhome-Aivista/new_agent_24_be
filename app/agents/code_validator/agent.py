@@ -27,39 +27,7 @@ class CodeValidatorAgent(BaseAgent):
 
     def run(self, workflow_id, state):
         # -------------------------------------------------------------------
-        # 1. Static Code Quality Analysis (SonarQube / mock)
-        # -------------------------------------------------------------------
-        analyzer = get_analyzer()
-        code_units = [t.get("generated_code") for t in state.get("generated_tests", []) if t.get("generated_code")]
-        analysis = analyzer.analyze(code_units)
-
-        cq_id = save_code_quality_run_with_issues(
-            str(uuid.uuid4()), workflow_id,
-            "mock" if analysis.is_mock else "sonarqube",
-            analysis.score, analysis.passed, analysis.is_mock,
-            issues=analysis.issues
-        )
-
-        explanation = ""
-        if analysis.issues:
-            try:
-                explanation = get_router().generate_text(
-                    "explanation",
-                    prompt=f"Briefly explain these code quality findings for a developer: {analysis.issues[:3]}"
-                ).text
-            except Exception:
-                pass
-
-        state["code_quality"] = {
-            "score": analysis.score,
-            "passed": analysis.passed,
-            "issues": analysis.issues,
-            "explanation": explanation,
-            "is_mock": analysis.is_mock,
-        }
-
-        # -------------------------------------------------------------------
-        # 2. Real Unit Test Execution + Code Coverage (pytest + coverage.py)
+        # 1. Real Unit Test Execution + Code Coverage (pytest + coverage.py)
         # -------------------------------------------------------------------
         unit_test_result = self._run_unit_tests_with_coverage(workflow_id, state)
         state["unit_test_execution"] = unit_test_result
@@ -89,16 +57,14 @@ class CodeValidatorAgent(BaseAgent):
             print(f"[CodeValidator] Could not run real coverage: {unit_test_result.get('error_message')}")
 
         # -------------------------------------------------------------------
-        # 3. Advance to EVIDENCE_GENERATION
+        # 2. Advance to EVIDENCE_GENERATION
         # -------------------------------------------------------------------
         state["current_stage"] = EVIDENCE_GENERATION
         self._record(
             workflow_id,
             "code_validation",
-            tool_name="code_analyzer+pytest_cov",
+            tool_name="pytest_cov",
             output_summary={
-                "quality_score": analysis.score,
-                "quality_passed": analysis.passed,
                 "tests_total": unit_test_result.get("total_tests", 0),
                 "tests_passed": unit_test_result.get("passed_tests", 0),
                 "line_coverage_pct": state["real_code_coverage"].get("line_coverage_pct"),

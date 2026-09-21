@@ -161,6 +161,8 @@ def start_workflow():
         "acceptance_criteria": [a["text"] for a in acs],
         "api_contracts": contracts,
         "capabilities": capabilities,
+        "postman_collection": col_content if "col_content" in locals() and col_content else None,
+        "target_host": (project or {}).get("base_url") or "http://127.0.0.1:5001",
     }
 
     # Clone / pull the git repo if configured
