@@ -5,7 +5,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.agents.api_executor.autonomous_agent import AutonomousApiVerifierAgent
 from app.tools.document_generator.docx_generator import generate_docx_evidence
 
-with open('c:/Users/ADMIN/Desktop/Agent-24/ticket-management.postman_collection.json', 'r', encoding='utf-8') as f:
+_default_coll = os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "ticket-management.postman_collection.json"))
+_coll_path = _default_coll if os.path.exists(_default_coll) else 'c:/Users/ADMIN/Desktop/Agent-24/ticket-management.postman_collection.json'
+with open(_coll_path, 'r', encoding='utf-8') as f:
     col_data = json.load(f)
 
 agent = AutonomousApiVerifierAgent()
