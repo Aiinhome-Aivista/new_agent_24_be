@@ -86,40 +86,36 @@ class Orchestrator:
         return self._advance_via_loop(workflow_id, state)
 
     def _advance_via_langgraph(self, workflow_id, state, graph):
-        """Execute workflow stages using the compiled LangGraph StateGraph."""
-        print(f"[ORCHESTRATOR][LangGraph] Advancing workflow {workflow_id[:8]}...")
+        """
+        Execute workflow stages using the compiled LangGraph StateGraph.
+
+        LangGraph graph.invoke() always runs from the fixed entry_point
+        (set_entry_point = requirement_analysis). Without a checkpointer
+        backend, it CANNOT resume mid-graph — it always restarts from the top.
+
+        Strategy:
+        - Fresh start (CREATED / REQUIREMENT_ANALYSIS): use LangGraph — the
+          graph runs from the beginning and routes correctly to checkpoints.
+        - Mid-pipeline resumption (any other stage): use the while-loop, which
+          can start from any stage. LangGraph's compiled graph is still the
+          authoritative node/edge definition; the loop just drives execution
+          without the graph runner.
+        """
+        stage = state.get("current_stage", sm.CREATED)
+        is_fresh_start = stage in (sm.CREATED, sm.REQUIREMENT_ANALYSIS)
+
+        if not is_fresh_start:
+            # Mid-pipeline resumption: fall back to the while-loop which can
+            # start from any stage.
+            print(f"[ORCHESTRATOR][LangGraph] Mid-pipeline resume at {stage} — using loop.")
+            return self._advance_via_loop(workflow_id, state)
+
+        print(f"[ORCHESTRATOR][LangGraph] Fresh start — running graph from requirement_analysis.")
         try:
-            # Inject workflow_id into state so nodes can access it
             state["workflow_id"] = workflow_id
-
-            # Determine entry point based on current stage
-            stage = state.get("current_stage", sm.CREATED)
-
-            # Map stage to the LangGraph entry node name
-            stage_to_entry = {
-                sm.CREATED: "requirement_analysis",
-                sm.REQUIREMENT_ANALYSIS: "requirement_analysis",
-                sm.SERVICE_PLANNING: "service_planning",
-                sm.TEST_PLANNING: "test_planning",
-                sm.TEST_GENERATION: "test_generation",
-                sm.CODE_GENERATION: "code_generation",
-                sm.API_EXECUTION: "api_execution",
-                sm.CODE_VALIDATION: "code_validation",
-                sm.EVIDENCE_GENERATION: "evidence_generation",
-                sm.ALM_ATTACHMENT: "alm_attachment",
-            }
-            entry_node = stage_to_entry.get(stage)
-
-            if not entry_node:
-                # Stage is a checkpoint or unknown — fall back to loop
-                print(f"[ORCHESTRATOR][LangGraph] No entry node for stage {stage}, using loop fallback.")
-                return self._advance_via_loop(workflow_id, state)
-
-            # Invoke the graph from the correct node
             result_state = graph.invoke(state)
             self._persist(workflow_id, result_state)
             return result_state
-
         except Exception as e:
             print(f"[ORCHESTRATOR][LangGraph] Error during graph execution: {e}. Falling back to loop.")
             return self._advance_via_loop(workflow_id, state)

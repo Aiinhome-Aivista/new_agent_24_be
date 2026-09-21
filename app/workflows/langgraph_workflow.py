@@ -24,7 +24,9 @@ from typing import Any, Dict, Optional
 from typing_extensions import TypedDict
 
 try:
+    # pyrefly: ignore [missing-import]
     from langgraph.graph import StateGraph, END
+    # pyrefly: ignore [missing-import]
     from langgraph.graph.state import CompiledStateGraph
     HAS_LANGGRAPH = True
 except ImportError:
@@ -81,6 +83,7 @@ class WorkflowState(TypedDict, total=False):
 
     # Flags
     postman_required: Optional[bool]
+    clarification_required: Optional[bool]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -169,9 +172,9 @@ def route_after_stage(state: WorkflowState) -> str:
     if stage == sm.POSTMAN_COLLECTION_REQUIRED:
         return "checkpoint_postman_collection_required"
 
-    # Map stage to next node name
+    # Map the NEXT stage (set by the just-executed agent) to the node to run
+    # Each agent sets current_stage = <next stage> before returning.
     stage_to_node = {
-        sm.REQUIREMENT_ANALYSIS: "requirement_analysis",
         sm.SERVICE_PLANNING: "service_planning",
         sm.TEST_PLANNING: "test_planning",
         sm.TEST_GENERATION: "test_generation",
