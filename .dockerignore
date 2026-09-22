@@ -1,0 +1,63 @@
+# ==========================================
+# Agent-24 Backend (.dockerignore)
+# Excludes development-only files from Docker build
+# ==========================================
+
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+
+# Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Testing & Development Scripts (Dev Only)
+tests/
+scripts/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+nosetests.xml
+coverage.xml
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Environment Secrets (Injected at runtime via container orchestrator)
+.env
+.env.*
+!.env.example
+
+# Local Database & Temporary DB files
+*.db
+*.sqlite
+*.sqlite3
+
+# Development & Runtime Scratch Data (Keep directories empty)
+tmp/*
+!tmp/.gitkeep
+workspaces/*
+!workspaces/.gitkeep
+data/uploads/*
+data/collections/*
+evidence_output/*
+!evidence_output/.gitkeep
+
+# OS & Editor Files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker files
+Dockerfile*
+.dockerignore

@@ -79,13 +79,14 @@ def cleanup_old_evidence():
                 except Exception:
                     pass
 
-        # 5. Clean up any accidental docx files in workspace root
-        ws_dir = os.path.abspath(os.path.join(out_dir, ".."))
-        for stray in glob.glob(os.path.join(ws_dir, "EVID-*.docx")):
-            try:
-                os.remove(stray)
-            except Exception:
-                pass
+        # 5. Clean up any accidental docx files in backend and workspace root
+        for parent_level in ["..", os.path.join("..", "..")]:
+            target_dir = os.path.abspath(os.path.join(out_dir, parent_level))
+            for stray in glob.glob(os.path.join(target_dir, "EVID-*.docx")):
+                try:
+                    os.remove(stray)
+                except Exception:
+                    pass
 
         # 6. Clean up temporary generated_tests directory:
         # Only keep test folders for currently active workflows.

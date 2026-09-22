@@ -510,16 +510,7 @@ def run_autonomous_verification():
         docx_path = generate_docx_evidence(evidence, out_dir=out_dir)
         evidence["docx_path"] = docx_path
 
-        # Automatically copy to workspace root for direct user access
-        try:
-            workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-            if os.path.exists(workspace_root):
-                import shutil
-                ws_docx = os.path.join(workspace_root, f"{evidence_key}.docx")
-                shutil.copy2(docx_path, ws_docx)
-                evidence["workspace_docx_path"] = ws_docx
-        except Exception as ws_err:
-            print(f"[ApiExecutor] Notice: workspace copy: {ws_err}")
+
 
         # Generate HTML/PDF report
         html_path = render_autonomous_evidence_html(evidence, out_dir=out_dir)
