@@ -199,6 +199,37 @@ class EvidenceGeneratorAgent(BaseAgent):
         code_generation = state.get("code_generation") or {}
 
         real_code_coverage = state.get("real_code_coverage") or {}
+        ac_api_code_mapping = state.get("ac_api_code_mapping") or []
+
+        # Determine unit_tests payload:
+        # If real unit test execution was performed (CodeValidatorAgent), use those metrics
+        unit_test_exec = state.get("unit_test_execution") or {}
+        if unit_test_exec.get("executed") and not unit_test_exec.get("is_mock"):
+            unit_tests_payload = {
+                "total": unit_test_exec.get("total_tests", len(test_cases)),
+                "passed": unit_test_exec.get("passed_tests", 0),
+                "failed": unit_test_exec.get("failed_tests", 0),
+                "skipped": unit_test_exec.get("skipped_tests", 0),
+                "errors": unit_test_exec.get("error_tests", 0),
+                "test_cases": test_cases,
+                "executed": True,
+            }
+        elif test_cases and state.get("code_generation"):
+            unit_tests_payload = {
+                "total": len(test_cases),
+                "passed": unit_test_exec.get("passed_tests", 0),
+                "failed": unit_test_exec.get("failed_tests", 0),
+                "test_cases": test_cases,
+                "executed": False,
+            }
+        else:
+            unit_tests_payload = {
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "test_cases": [],
+                "executed": False,
+            }
 
         if api_evidence:
             unified_payload = {
@@ -211,12 +242,8 @@ class EvidenceGeneratorAgent(BaseAgent):
                 "coverage_report": coverage_report,
                 "code_generation": code_generation,
                 "real_code_coverage": real_code_coverage,
-                "unit_tests": {
-                    "total": len(test_cases),
-                    "passed": execution.get("passed", len(test_cases)),
-                    "failed": execution.get("failed", 0),
-                    "test_cases": test_cases,
-                },
+                "ac_api_code_mapping": ac_api_code_mapping,
+                "unit_tests": unit_tests_payload,
                 "tests": test_cases,
             }
         else:
@@ -229,6 +256,7 @@ class EvidenceGeneratorAgent(BaseAgent):
                 "coverage_report": coverage_report,
                 "code_generation": code_generation,
                 "real_code_coverage": real_code_coverage,
+                "ac_api_code_mapping": ac_api_code_mapping,
                 "target_host": target_host,
                 "collection_name": "API Test Suite",
                 "summary_recommendation": "API Conforms to Specifications",
@@ -240,12 +268,7 @@ class EvidenceGeneratorAgent(BaseAgent):
                 "total_deviations": 0,
                 "deviation_summary": {"deviations": []},
                 "results": [],
-                "unit_tests": {
-                    "total": len(test_cases),
-                    "passed": execution.get("passed", len(test_cases)),
-                    "failed": 0,
-                    "test_cases": test_cases,
-                },
+                "unit_tests": unit_tests_payload,
                 "tests": test_cases,
                 "execution_timestamp": datetime.now(timezone.utc).isoformat(),
             }
@@ -258,15 +281,24 @@ class EvidenceGeneratorAgent(BaseAgent):
         # Render Word .DOCX and interactive HTML package with visual snapshots in evidence_output folder
         docx_path = os.path.join(out_dir, f"{evidence_key}.docx")
         html_path = os.path.join(out_dir, f"{evidence_key}.html")
+        print(f"[EvidenceGenerator] Generating DOCX evidence to: {docx_path}")
         try:
             generate_docx_evidence(unified_payload, out_path=docx_path, out_dir=out_dir)
+            print(f"[EvidenceGenerator] DOCX evidence generated: {os.path.isfile(docx_path)}")
         except Exception as dx_err:
+            import traceback
+            traceback.print_exc()
             print(f"[EvidenceGenerator] Warning: docx generation failed: {dx_err}")
 
+        print(f"[EvidenceGenerator] Generating HTML evidence to: {html_path}")
         try:
+            import copy
             from app.tools.document_generator.generator import render_autonomous_evidence_html
-            render_autonomous_evidence_html(unified_payload, out_path=html_path, out_dir=out_dir)
+            render_autonomous_evidence_html(copy.deepcopy(unified_payload), out_path=html_path, out_dir=out_dir)
+            print(f"[EvidenceGenerator] HTML evidence generated: {os.path.isfile(html_path)}")
         except Exception as html_err:
+            import traceback
+            traceback.print_exc()
             print(f"[EvidenceGenerator] Warning: html generation failed: {html_err}")
 
         insert_evidence(

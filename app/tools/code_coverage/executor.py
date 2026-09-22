@@ -21,6 +21,7 @@ Constraints:
 
 import os
 import sys
+import glob
 import json
 import shutil
 import subprocess
@@ -43,6 +44,8 @@ class FileCoverageDetail:
     missing_lines: List[int] = field(default_factory=list)
     num_branches: int = 0
     num_partial_branches: int = 0
+    covered_branches: int = 0
+    covered_lines: int = 0
 
 
 @dataclass
@@ -116,25 +119,43 @@ class CoverageResult:
         }
 
 
-def _parse_pytest_output(output: str) -> Dict[str, int]:
+def _parse_pytest_output(output: str) -> Dict[str, Any]:
     """
     Parse pytest summary line like:
       '5 passed, 1 failed, 0 skipped in 2.34s'
+      '22 passed in 0.52s'
+      '8 passed, 1 warning in 0.42s'
     Returns dict with total, passed, failed, skipped, errors, time_s.
     """
     import re
     result = {"passed": 0, "failed": 0, "skipped": 0, "errors": 0, "time_s": 0.0}
-    # Match the summary line
-    m = re.search(
-        r'(?:(\d+) passed)?[,\s]*(?:(\d+) failed)?[,\s]*(?:(\d+) skipped)?[,\s]*(?:(\d+) error)?.*?in ([\d.]+)s',
-        output
-    )
-    if m:
-        result["passed"] = int(m.group(1) or 0)
-        result["failed"] = int(m.group(2) or 0)
-        result["skipped"] = int(m.group(3) or 0)
-        result["errors"] = int(m.group(4) or 0)
-        result["time_s"] = float(m.group(5) or 0)
+    if not output:
+        return result
+
+    # Strip ANSI escape sequences
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    clean = ansi_escape.sub('', output)
+
+    passed_m = re.search(r'(\d+)\s+passed', clean)
+    if passed_m:
+        result["passed"] = int(passed_m.group(1))
+
+    failed_m = re.search(r'(\d+)\s+failed', clean)
+    if failed_m:
+        result["failed"] = int(failed_m.group(1))
+
+    skipped_m = re.search(r'(\d+)\s+skipped', clean)
+    if skipped_m:
+        result["skipped"] = int(skipped_m.group(1))
+
+    error_m = re.search(r'(\d+)\s+error', clean)
+    if error_m:
+        result["errors"] = int(error_m.group(1))
+
+    time_m = re.search(r'in\s+([\d.]+)\s*s', clean)
+    if time_m:
+        result["time_s"] = float(time_m.group(1))
+
     return result
 
 
@@ -160,13 +181,13 @@ def _parse_coverage_json(report_path: str, source_root: str) -> Dict[str, Any]:
 
     num_statements = totals.get("num_statements", 0)
     num_missing = totals.get("missing_lines", 0)
-    covered_lines = num_statements - num_missing
-    line_pct = round((covered_lines / num_statements * 100) if num_statements > 0 else 0.0, 1)
+    covered_lines = totals.get("covered_lines", num_statements - num_missing)
+    line_pct = round((covered_lines / num_statements * 100) if num_statements > 0 else 0.0, 2)
 
     num_branches = totals.get("num_branches", 0)
     num_partial = totals.get("num_partial_branches", 0)
-    covered_branches = num_branches - num_partial
-    branch_pct = round((covered_branches / num_branches * 100) if num_branches > 0 else 0.0, 1)
+    covered_branches = totals.get("covered_branches", num_branches - num_partial)
+    branch_pct = round((covered_branches / num_branches * 100) if num_branches > 0 else 0.0, 2)
 
     covered_files = []
     uncovered_files = []
@@ -175,23 +196,29 @@ def _parse_coverage_json(report_path: str, source_root: str) -> Dict[str, Any]:
         summary = fdata.get("summary", {})
         f_statements = summary.get("num_statements", 0)
         f_missing = summary.get("missing_lines", 0)
-        f_covered = f_statements - f_missing
-        f_line_pct = round((f_covered / f_statements * 100) if f_statements > 0 else 0.0, 1)
+        f_covered = summary.get("covered_lines", f_statements - f_missing)
+        f_line_pct = round((f_covered / f_statements * 100) if f_statements > 0 else 0.0, 2)
 
         f_branches = summary.get("num_branches", 0)
         f_partial = summary.get("num_partial_branches", 0)
-        f_covered_b = f_branches - f_partial
-        f_branch_pct = round((f_covered_b / f_branches * 100) if f_branches > 0 else 0.0, 1)
+        f_covered_b = summary.get("covered_branches", f_branches - f_partial)
+        f_branch_pct = round((f_covered_b / f_branches * 100) if f_branches > 0 else 0.0, 2)
 
         missing_lines = fdata.get("missing_lines", [])
 
-        try:
-            rel_path = os.path.relpath(fpath, source_root)
-        except Exception:
+        # Determine relative path and absolute path
+        if os.path.isabs(fpath):
+            abs_fpath = fpath
+            try:
+                rel_path = os.path.relpath(fpath, source_root)
+            except Exception:
+                rel_path = fpath
+        else:
             rel_path = fpath
+            abs_fpath = os.path.abspath(os.path.join(source_root, fpath))
 
         detail = FileCoverageDetail(
-            file_path=fpath,
+            file_path=abs_fpath,
             relative_path=rel_path,
             line_coverage_pct=f_line_pct,
             branch_coverage_pct=f_branch_pct,
@@ -200,6 +227,8 @@ def _parse_coverage_json(report_path: str, source_root: str) -> Dict[str, Any]:
             missing_lines=missing_lines,
             num_branches=f_branches,
             num_partial_branches=f_partial,
+            covered_branches=f_covered_b,
+            covered_lines=f_covered,
         )
         covered_files.append(detail)
 
@@ -212,13 +241,13 @@ def _parse_coverage_json(report_path: str, source_root: str) -> Dict[str, Any]:
     if app_files:
         num_statements = sum(f.num_statements for f in app_files)
         num_missing = sum(f.num_missing for f in app_files)
-        covered_lines = num_statements - num_missing
-        line_pct = round((covered_lines / num_statements * 100) if num_statements > 0 else 0.0, 1)
+        covered_lines = sum(f.covered_lines for f in app_files)
+        line_pct = round((covered_lines / num_statements * 100) if num_statements > 0 else 0.0, 2)
 
         num_branches = sum(f.num_branches for f in app_files)
         num_partial = sum(f.num_partial_branches for f in app_files)
-        covered_branches = num_branches - num_partial
-        branch_pct = round((covered_branches / num_branches * 100) if num_branches > 0 else 0.0, 1)
+        covered_branches = sum(f.covered_branches for f in app_files)
+        branch_pct = round((covered_branches / num_branches * 100) if num_branches > 0 else 0.0, 2)
 
     return {
         "line_coverage_pct": line_pct,
@@ -250,16 +279,26 @@ def _identify_scoped_source_files(
 
     scoped = set()
 
-    # Normalize function names to extract module path hints
+    # Normalize function names or direct file paths to extract module path hints
     for func_ref in (relevant_functions or []):
+        ref_str = str(func_ref).strip()
+        if ref_str.endswith(".py"):
+            norm_ref = ref_str.replace("\\", "/").lower()
+            if any(skip in norm_ref for skip in ["venv", ".venv", "site-packages", "test", "tests"]):
+                continue
+            direct_path = os.path.join(workspace_path, ref_str)
+            if os.path.isfile(direct_path):
+                scoped.add(direct_path)
+                continue
+
         # e.g. "auth_controller.login" -> look for auth_controller.py
-        parts = str(func_ref).split(".")
+        parts = ref_str.split(".")
         if len(parts) >= 2:
             module_hint = parts[0].lower().replace("-", "_")
         else:
             module_hint = parts[0].lower().replace("-", "_") if parts else ""
 
-        if not module_hint:
+        if not module_hint or module_hint in ("venv", "lib", "site_packages", "test", "tests"):
             continue
 
         # Search workspace for matching .py files
@@ -272,6 +311,12 @@ def _identify_scoped_source_files(
             for fname in files:
                 if fname.endswith(".py") and module_hint in fname.lower():
                     scoped.add(os.path.join(root, fname))
+
+    # Strip any stray venv/test paths that may have entered
+    scoped = {
+        p for p in scoped
+        if not any(skip in p.replace("\\", "/").lower() for skip in ["/venv/", "/.venv/", "/site-packages/", "/tests/", "/test/"])
+    }
 
     # If we couldn't identify specific files, include the whole app/ directory or root python files
     if not scoped:
@@ -349,10 +394,18 @@ class PytestCoverageExecutor:
             result.is_mock = True
             return result
 
-        # Create a temporary working directory for test execution
-        tmp_dir = tempfile.mkdtemp(prefix="agent24_cov_")
-        coverage_json_path = os.path.join(tmp_dir, "coverage.json")
+        # Determine backend root for isolated temporary runs within Agent-24
+        backend_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        base_tmp = os.path.join(backend_root, "tmp", "coverage_runs")
+        os.makedirs(base_tmp, exist_ok=True)
 
+        # Create a dedicated temporary working directory inside Agent-24 backend
+        tmp_dir = tempfile.mkdtemp(prefix="agent24_cov_", dir=base_tmp)
+        coverage_json_path = os.path.join(tmp_dir, "coverage.json")
+        coverage_db_path = os.path.join(tmp_dir, ".coverage")
+        pytest_cache_dir = os.path.join(tmp_dir, ".pytest_cache")
+
+        source_dir = None
         try:
             # Resolve workspace path and test file to absolute paths
             abs_workspace = os.path.abspath(workspace_path) if workspace_path and os.path.isdir(workspace_path) else None
@@ -365,45 +418,81 @@ class PytestCoverageExecutor:
             )
             result.scoped_source_files = scoped_files
 
-            # Copy test file to temp dir so it runs in isolation
+            # Determine test file to execute:
+            # If the test file is inside source_dir (workspace), run it directly so fixtures and imports resolve naturally
             test_filename = os.path.basename(abs_test_file)
-            tmp_test_file = os.path.join(tmp_dir, test_filename)
-            shutil.copy2(abs_test_file, tmp_test_file)
+            test_to_run = abs_test_file
+            is_in_source = False
+            try:
+                is_in_source = os.path.commonpath([abs_test_file, source_dir]) == source_dir
+            except Exception:
+                pass
 
-            # Copy conftest.py if available
-            test_dir = os.path.dirname(abs_test_file)
-            conftest_src = conftest_path or os.path.join(test_dir, "conftest.py")
-            if not os.path.isfile(conftest_src) and abs_workspace:
-                ws_conftest = os.path.join(abs_workspace, "tests", "conftest.py")
-                if os.path.isfile(ws_conftest):
-                    conftest_src = ws_conftest
+            if not is_in_source:
+                # Copy test file to temp dir so it runs in isolation
+                tmp_test_file = os.path.join(tmp_dir, test_filename)
+                shutil.copy2(abs_test_file, tmp_test_file)
+                test_to_run = tmp_test_file
 
-            if os.path.isfile(conftest_src):
-                shutil.copy2(conftest_src, os.path.join(tmp_dir, "conftest.py"))
+                # Copy conftest.py if available
+                test_dir = os.path.dirname(abs_test_file)
+                conftest_src = conftest_path or os.path.join(test_dir, "conftest.py")
+                if not os.path.isfile(conftest_src) and abs_workspace:
+                    ws_conftest = os.path.join(abs_workspace, "tests", "conftest.py")
+                    if os.path.isfile(ws_conftest):
+                        conftest_src = ws_conftest
+
+                if os.path.isfile(conftest_src):
+                    shutil.copy2(conftest_src, os.path.join(tmp_dir, "conftest.py"))
+
+            # Build scoped coverage targets (clean module names / relative packages)
+            cov_modules = set()
+            for sf in scoped_files:
+                try:
+                    rel_p = os.path.relpath(sf, source_dir)
+                    mod = os.path.splitext(rel_p)[0].replace("\\", ".").replace("/", ".")
+                    if mod:
+                        cov_modules.add(mod)
+                except Exception:
+                    pass
+
+            if not cov_modules:
+                if os.path.isfile(os.path.join(source_dir, "app.py")) or os.path.isdir(os.path.join(source_dir, "app")):
+                    cov_modules.add("app")
+                else:
+                    cov_modules.add(".")
 
             # Build pytest command with coverage
             cmd = [
                 self.python_exe, "-m", "pytest",
-                tmp_test_file,
+                test_to_run,
                 "--tb=short",
                 "-v",
                 "--no-header",
-                f"--cov={source_dir}",
-                "--cov-branch",
-                "--cov-report=json:" + coverage_json_path,
-                "--cov-report=term-missing",
-                "-p", "no:cacheprovider",
             ]
+            for m in sorted(cov_modules):
+                cmd.append(f"--cov={m}")
 
-            # If we have scoped files, use --cov-include to limit scope
-            if scoped_files:
-                # Build include patterns from scoped file list
-                for sf in scoped_files[:20]:  # limit to 20 most relevant files
-                    cmd.append(f"--cov={sf}")
+            cmd.extend([
+                "--cov-branch",
+                f"--cov-report=json:{coverage_json_path}",
+                "--cov-report=term-missing",
+                "-o", f"cache_dir={pytest_cache_dir}",
+                "-p", "no:cacheprovider",
+            ])
 
-            # Set up subprocess environment — inherit current env + additions
+            # Set up subprocess environment:
+            # 1. Put source_dir at the front of PYTHONPATH so target imports resolve first
+            # 2. Exclude any Agent-24 backend directories so target app module is not shadowed!
+            # 3. Direct COVERAGE_FILE inside tmp_dir in Agent-24 so target codebase is NEVER polluted!
             env = os.environ.copy()
-            env["PYTHONPATH"] = source_dir + os.pathsep + env.get("PYTHONPATH", "")
+            clean_paths = [source_dir]
+            for p in env.get("PYTHONPATH", "").split(os.pathsep):
+                p_norm = os.path.normpath(p).lower()
+                if p and "new_agent_24_be" not in p_norm and p_norm != os.path.normpath(source_dir).lower():
+                    clean_paths.append(p)
+            env["PYTHONPATH"] = os.pathsep.join(clean_paths)
+            env["COVERAGE_FILE"] = coverage_db_path
             if extra_env:
                 env.update(extra_env)
 
@@ -468,9 +557,27 @@ class PytestCoverageExecutor:
             result.executed = False
             print(f"[CoverageExecutor] ERROR: {e}")
         finally:
-            # Clean up temporary directory
+            # 1. Clean up temporary directory inside Agent-24 backend
             try:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+            # 2. Safety sweep: Ensure target source codebase is completely pristine
+            # and free of any accidental .coverage or .pytest_cache files
+            try:
+                if source_dir and os.path.isdir(source_dir):
+                    for stray in [".coverage", ".pytest_cache"]:
+                        stray_path = os.path.join(source_dir, stray)
+                        if os.path.isfile(stray_path):
+                            os.remove(stray_path)
+                        elif os.path.isdir(stray_path):
+                            shutil.rmtree(stray_path, ignore_errors=True)
+                    for f in glob.glob(os.path.join(source_dir, ".coverage*")):
+                        try:
+                            os.remove(f)
+                        except Exception:
+                            pass
             except Exception:
                 pass
 

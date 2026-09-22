@@ -53,16 +53,16 @@ def cleanup_old_evidence():
             filename = os.path.basename(file_path)
             base_name, ext = os.path.splitext(filename)
 
-            # Purge any html, md, or json files immediately
-            if ext.lower() in (".html", ".md", ".json"):
+            # Purge temporary md or json files immediately
+            if ext.lower() in (".md", ".json"):
                 try:
                     os.remove(file_path)
                 except Exception:
                     pass
                 continue
 
-            # For docx files: delete unless it is currently awaiting approval in keep_keys
-            if ext.lower() == ".docx":
+            # For docx and html evidence files: keep active evidence matching keep_keys
+            if ext.lower() in (".docx", ".html"):
                 is_currently_needed = any(k in base_name for k in keep_keys)
                 if not is_currently_needed:
                     try:

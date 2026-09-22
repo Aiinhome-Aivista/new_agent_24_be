@@ -56,8 +56,8 @@ def test_pipeline_runs_execution_and_validation(stub_db):
     state = orch.advance("wf-2", _initial_state())
     state = orch.resume("wf-2", state, sm.TEST_REVIEW)
     assert state["current_stage"] == sm.ALM_APPROVAL
-    # Deterministic tools produced quality values in validation stage (not the LLM).
-    assert state["code_quality"]["score"] > 0
+    # Validation stage executed unit tests and code coverage (code quality calculation removed).
+    assert state.get("unit_test_execution") is not None
 
 
 def test_pipeline_reaches_alm_approval(stub_db):

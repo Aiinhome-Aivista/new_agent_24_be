@@ -21,8 +21,12 @@ from app.llm.model_router.router import get_router
 from app.llm.client.gemini_client import _clean_json_text
 
 
-# In-memory cached hosts populated dynamically as API targets are probed
-_HOST_CACHE: list = []
+# In-memory cached hosts for quick reuse across sessions
+_HOST_CACHE = [
+    {"url": "http://localhost:5001", "name": "Auth Service (Local)", "last_seen": "Active", "status": "online"},
+    {"url": "http://localhost:5000", "name": "TDD Backend (Local)", "last_seen": "Active", "status": "online"},
+    {"url": "http://localhost:8080", "name": "Payments API (Stage)", "last_seen": "Recent", "status": "unknown"},
+]
 
 
 def get_cached_hosts():
@@ -331,7 +335,7 @@ Generate all {len(acceptance_criteria)} executable test scenarios in valid JSON 
         (AC-01 through AC-08, etc.) by combining baseline Postman collection contracts
         with the validation rules, mutation requirements, and boundary constraints declared in the ACs.
         """
-        if not acceptance_criteria:
+        if not acceptance_criteria and story and story.get("id") and story.get("external_key") != "STORY-LIVE":
             acceptance_criteria = self._load_workspace_story_acs(story)
 
         if not acceptance_criteria:
@@ -836,18 +840,34 @@ Generate all {len(acceptance_criteria)} executable test scenarios in valid JSON 
                 except Exception:
                     pass
 
+            # Extract AC ID and Test Case ID
+            ac_key_val = ep.get("ac_key") or ep.get("ac_id") or ""
+            if not ac_key_val and r.get("test_key"):
+                ac_match = re.search(r'\b(AC-?\d+)\b', str(r.get("test_key")), re.I)
+                if ac_match:
+                    ac_key_val = ac_match.group(1).upper()
+            test_case_id = r.get("test_case_id") or ep.get("test_case_id") or f"TC-{idx+1:03d}"
+
             # Build comprehensive API Call Evidence Snapshot
+            req_headers_dict = (redacted_req.get("headers") if isinstance(redacted_req, dict) else {}) or r.get("req_headers") or {}
+            resp_headers_dict = redacted_resp_headers or r.get("resp_headers") or {}
+
             api_call_snapshot = {
+                "ac_key": ac_key_val,
+                "ac_id": ac_key_val,
+                "test_case_id": test_case_id,
                 "method": method,
                 "url": url,
                 "endpoint": endpoint,
                 "status_code": status_code,
+                "expected_status_code": ep.get("expected_status_code", 200),
                 "duration_ms": duration_ms,
-                "request_headers": (redacted_req.get("headers") if isinstance(redacted_req, dict) else {}) or {},
+                "request_headers": req_headers_dict,
                 "request_payload": req_payload,
-                "response_headers": redacted_resp_headers or {},
+                "response_headers": resp_headers_dict,
                 "response_payload": resp_payload,
                 "captured_at": execution_timestamp,
+                "passed": r.get("passed", False),
             }
 
             # If endpoint execution failed or status 5xx but no deviation was caught, synthesize deviation
@@ -865,6 +885,9 @@ Generate all {len(acceptance_criteria)} executable test scenarios in valid JSON 
             # Attach API call snapshot directly to each deviation
             for dev in deviations:
                 dev["api_call"] = api_call_snapshot
+                dev["ac_key"] = ac_key_val
+                dev["ac_id"] = ac_key_val
+                dev["test_case_id"] = test_case_id
                 dev["url"] = url
                 dev["method"] = method
                 dev["endpoint"] = endpoint
@@ -890,7 +913,10 @@ Generate all {len(acceptance_criteria)} executable test scenarios in valid JSON 
             all_deviations.extend(deviations)
 
             structured_results.append({
-                "test_key": r.get("test_key"),
+                "test_key": r.get("test_key") or f"{method} {endpoint}",
+                "test_case_id": test_case_id,
+                "ac_key": ac_key_val,
+                "ac_id": ac_key_val,
                 "method": method,
                 "endpoint": endpoint,
                 "url": url,
@@ -902,13 +928,16 @@ Generate all {len(acceptance_criteria)} executable test scenarios in valid JSON 
                 "deviations": deviations,
                 "request_payload": req_payload,
                 "response_payload": resp_payload,
+                "req_headers": req_headers_dict,
+                "resp_headers": resp_headers_dict,
                 "api_call": api_call_snapshot,
                 "request": redacted_req,
                 "response": {
                     "status_code": status_code,
-                    "headers": redacted_resp_headers,
+                    "headers": resp_headers_dict,
                     "body": redacted_resp_body,
-                }
+                },
+                "timestamp": execution_timestamp,
             })
 
         # 6. Autonomous Decision Logic
@@ -931,10 +960,37 @@ Generate all {len(acceptance_criteria)} executable test scenarios in valid JSON 
 
         self._log("DECISION_LOGIC", f"Autonomous Assessment Result: '{summary_recommendation.upper()}' — Status: {decision_status}")
 
+        # 6. Traceability Mapping
+        ac_api_code_mapping = []
+        try:
+            from app.tools.traceability.mapper import TraceabilityMapper
+            mapper = TraceabilityMapper()
+            ac_api_code_mapping = mapper.map(
+                acs=acceptance_criteria or [],
+                extracted_apis=endpoints or [],
+                postman_contracts=baseline_endpoints or [],
+            )
+            self._log("TRACEABILITY", f"Successfully mapped {len(ac_api_code_mapping)} acceptance criteria to APIs and codebase.")
+        except Exception as map_err:
+            self._log("TRACEABILITY", f"Traceability mapping note: {map_err}", level="WARN")
+
         # 7. Cryptographic Integrity Seal
         traceability_id = f"TRC-{uuid.uuid4().hex[:10].upper()}"
         evidence_key = f"EVID-AUTO-{uuid.uuid4().hex[:8].upper()}"
         execution_timestamp = datetime.now(timezone.utc).isoformat()
+
+        serializable_acs = []
+        for ac in (acceptance_criteria or []):
+            if isinstance(ac, dict):
+                clean_ac = {}
+                for k, v in ac.items():
+                    if hasattr(v, "isoformat"):
+                        clean_ac[k] = v.isoformat()
+                    else:
+                        clean_ac[k] = v
+                serializable_acs.append(clean_ac)
+            else:
+                serializable_acs.append(str(ac))
 
         canonical_evidence_payload = {
             "evidence_key": evidence_key,
@@ -943,7 +999,9 @@ Generate all {len(acceptance_criteria)} executable test scenarios in valid JSON 
             "story": {
                 "external_key": story.get("external_key"),
                 "title": story.get("title"),
+                "acceptance_criteria": serializable_acs,
             },
+            "acceptance_criteria": serializable_acs,
             "target_host": clean_base_url,
             "collection_name": resolved_col_name,
             "summary_recommendation": summary_recommendation,
@@ -956,7 +1014,7 @@ Generate all {len(acceptance_criteria)} executable test scenarios in valid JSON 
         }
 
         # Deterministic SHA-256 Checksum
-        seal_bytes = json.dumps(canonical_evidence_payload, sort_keys=True).encode("utf-8")
+        seal_bytes = json.dumps(canonical_evidence_payload, sort_keys=True, default=str).encode("utf-8")
         sha256_seal = hashlib.sha256(seal_bytes).hexdigest()
 
         # Final Structured Evidence Object
@@ -965,6 +1023,7 @@ Generate all {len(acceptance_criteria)} executable test scenarios in valid JSON 
             "sha256_seal": sha256_seal,
             "decision_status": decision_status,
             "decision_summary": decision_summary,
+            "ac_api_code_mapping": ac_api_code_mapping,
             "deviation_summary": {
                 "total_deviations": total_deviations,
                 "critical": critical_count,

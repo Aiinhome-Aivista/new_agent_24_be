@@ -11,7 +11,7 @@ from pathlib import Path
 from app.agents.base import BaseAgent
 from app.llm.model_router.router import get_router
 from app.repositories.test_repo import list_test_cases, update_test_case_code_by_key
-from app.workflows.state_machine import CODE_VALIDATION
+from app.workflows.state_machine import API_EXECUTION, CODE_VALIDATION
 
 def _get_system_prompt(lang: str, framework: str) -> str:
     lang = (lang or "python").lower()
@@ -167,7 +167,7 @@ class CodeGeneratorAgent(BaseAgent):
 
         elapsed_ms = int((time.time() - start_time) * 1000)
         print(f"[CodeGenerator] Finished code generation in {elapsed_ms}ms. Total lines: {total_lines}.\n")
-        log_entries.append(f"[{now_str}] [COMPLETE] Code generation complete in {elapsed_ms}ms. Total lines: {total_lines}. Advancing to CODE_VALIDATION.")
+        log_entries.append(f"[{now_str}] [COMPLETE] Code generation complete in {elapsed_ms}ms. Total lines: {total_lines}. Advancing to API_EXECUTION.")
 
         code_log = {
             "workflow_id": workflow_id,
@@ -185,7 +185,7 @@ class CodeGeneratorAgent(BaseAgent):
 
         state["generated_tests"] = updated_tests
         state["code_generation"] = code_log
-        state["current_stage"] = CODE_VALIDATION
+        state["current_stage"] = API_EXECUTION
         
         self._record(workflow_id, "code_generation", model_name=f"{lang}/{framework}",
                      latency_ms=total_latency, output_summary={"total_lines": total_lines, "tests": len(updated_tests)})
@@ -273,8 +273,16 @@ Generate a complete, executable {framework} test function/method in {lang} that 
         assertEquals({status_code}, response.getStatusCodeValue(), "Expected HTTP {status_code}");
     }}"""
         elif lang == "python":
-            body_str = json.dumps(body) if body is not None else None
-            req_call = f'client.{method}("{endpoint}", json={body_str})' if body_str else f'client.{method}("{endpoint}")'
+            headers = req_spec.get("headers") or {}
+            hdr_str = f", headers={json.dumps(headers)}" if headers else ""
+            if isinstance(body, dict):
+                req_call = f'client.{method}("{endpoint}", json={json.dumps(body)}{hdr_str})'
+            elif isinstance(body, str):
+                req_call = f'client.{method}("{endpoint}", data={json.dumps(body)}, content_type="text/plain"{hdr_str})'
+            elif body is not None:
+                req_call = f'client.{method}("{endpoint}", json={json.dumps(body)}{hdr_str})'
+            else:
+                req_call = f'client.{method}("{endpoint}"{hdr_str})'
             return f"""def test_{test_key.lower().replace('-', '_')}(client):
     \"\"\"
     Test Case: {test_key} - {title}
@@ -380,8 +388,10 @@ except Exception:
         except Exception as e:
             log_entries.append(f"[{now_str}] [WARN] Could not write evidence test file: {e}")
 
-        # 2. Write to project Git workspace if workspace path is present
-        if workspace_path and os.path.isdir(workspace_path):
+        # 2. Write to project Git workspace if workspace path is present and not direct user codebase
+        is_direct_user_codebase = workspace_path and "simple_python_deploy" in os.path.normpath(workspace_path)
+        write_to_ws = project.get("write_tests_to_workspace", not is_direct_user_codebase)
+        if write_to_ws and workspace_path and os.path.isdir(workspace_path):
             ws_root = Path(workspace_path)
             # Find or create test directory dynamically based on package
             if lang in ("java", "kotlin"):

@@ -4,6 +4,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.agents.api_executor.autonomous_agent import AutonomousApiVerifierAgent
 from app.tools.document_generator.docx_generator import generate_docx_evidence
+from app.tools.document_generator.generator import render_autonomous_evidence_html
 
 _default_coll = os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "ticket-management.postman_collection.json"))
 _coll_path = _default_coll if os.path.exists(_default_coll) else 'c:/Users/ADMIN/Desktop/Agent-24/ticket-management.postman_collection.json'
@@ -28,6 +29,11 @@ print(f"Summary recommendation: {evidence['summary_recommendation']}")
 for idx, r in enumerate(evidence['results']):
     print(f"Case #{idx+1}: [{r['method']}] {r['endpoint']} -> HTTP {r['status_code']} (Expected: {r['expected_status_code']}, Passed: {r['passed']})")
 
-docx_path = generate_docx_evidence(evidence, out_dir='c:/Users/ADMIN/Desktop/Agent-24/new_agent_24_be/evidence_output')
+out_dir = 'c:/Users/ADMIN/Desktop/Agent-24/new_agent_24_be/evidence_output'
+docx_path = generate_docx_evidence(evidence, out_dir=out_dir)
 print(f"Generated DOCX at: {docx_path}")
-print(f"File exists: {os.path.exists(docx_path)}, size: {os.path.getsize(docx_path)} bytes")
+print(f"DOCX exists: {os.path.exists(docx_path)}, size: {os.path.getsize(docx_path)} bytes")
+
+html_path = render_autonomous_evidence_html(evidence, out_dir=out_dir)
+print(f"Generated HTML at: {html_path}")
+print(f"HTML exists: {os.path.exists(html_path)}, size: {os.path.getsize(html_path)} bytes")

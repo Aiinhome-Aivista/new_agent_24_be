@@ -28,7 +28,17 @@ class TestCaseDeduplicator:
         primary_ac = ac_ids[0] if ac_ids else "AC-GEN"
 
         # Extract meaningful alphanumeric tokens from title to capture specific condition
-        title_tokens = [w for w in re.sub(r"[^a-z0-9]", " ", title).split() if len(w) > 2 and w not in ("verify", "test", "should", "with", "when", "that", "from", "for", "the", "and", "request")]
+        stopwords = {"verify", "test", "should", "with", "when", "that", "from", "for", "the", "and", "request", "of", "in", "to", "at", "by", "a", "an"}
+        title_tokens = []
+        for w in re.sub(r"[^a-z0-9]", " ", title).split():
+            if w in stopwords or w.isdigit():
+                continue
+            if w == "rejection":
+                w = "reject"
+            elif w.endswith("s") and len(w) > 4 and not w.endswith("ss"):
+                w = w[:-1]
+            if len(w) > 2:
+                title_tokens.append(w)
         title_sig = "_".join(title_tokens[:6]) if title_tokens else "general"
 
         return f"{primary_ac}::{method}::{status}::{stype}::{title_sig}"

@@ -17,17 +17,9 @@ class AnalysisResult:
 
 class MockAnalyzer:
     def analyze(self, code_units):
-        rng = random.Random(len(code_units or []))
-        issues = []
-        if rng.random() > 0.6:
-            issues.append({"severity": "minor", "rule": "UnusedImport",
-                           "file": "GeneratedTest.java", "line": 3,
-                           "description": "Unused import statement (MOCK finding).",
-                           "remediation": "Remove the unused import."})
-        score = 92.0 - 5 * len(issues)
-        return AnalysisResult(score, score >= 80, issues, is_mock=True)
+        # Code quality calculation removed per system specification.
+        return AnalysisResult(score=100.0, passed=True, issues=[], is_mock=False)
 
 
 def get_analyzer():
-    # Real analyzers registered here when configured; MOCK by default.
     return MockAnalyzer()

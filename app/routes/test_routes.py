@@ -18,6 +18,7 @@ def test_cases(workflow_id):
     coverage_matrix = []
     generation_summary = None
     contract_gaps = []
+    ac_api_code_mapping = []
     if run:
         state = run.get("state_json") or {}
         if isinstance(state, str):
@@ -28,12 +29,30 @@ def test_cases(workflow_id):
         coverage_matrix = state.get("coverage_matrix", [])
         generation_summary = state.get("generation_summary")
         contract_gaps = state.get("contract_gaps", [])
+        ac_api_code_mapping = state.get("ac_api_code_mapping") or []
+
+        if not generation_summary and tcs:
+            try:
+                from app.agents.test_generator.test_validator import GenerationSummaryCalculator, AcceptanceCriteriaCoverageValidator
+                acs = state.get("acceptance_criteria") or []
+                cov_report = AcceptanceCriteriaCoverageValidator.validate_coverage(tcs, acs)
+                if not coverage_matrix and cov_report.get("coverage_matrix"):
+                    coverage_matrix = cov_report["coverage_matrix"]
+                generation_summary = GenerationSummaryCalculator.calculate(
+                    total_candidates=len(tcs),
+                    final_test_cases=tcs,
+                    coverage_report=cov_report,
+                    contract_gaps=contract_gaps
+                )
+            except Exception as e:
+                print(f"[test_routes] Handled generation_summary derivation: {e}")
 
     return ok({
         "test_cases": tcs,
         "coverage_matrix": coverage_matrix,
         "generation_summary": generation_summary,
-        "contract_gaps": contract_gaps
+        "contract_gaps": contract_gaps,
+        "ac_api_code_mapping": ac_api_code_mapping,
     })
 
 

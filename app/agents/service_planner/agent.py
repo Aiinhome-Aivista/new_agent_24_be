@@ -1,3 +1,4 @@
+import os
 import json
 from app.agents.base import BaseAgent
 from app.llm.model_router.router import get_router
@@ -163,9 +164,9 @@ class ServicePlannerAgent(BaseAgent):
         story = state.get("story", {})
         analysis = state.get("analysis", {})
 
-        # Extract codebase context and detect base URL from Git workspace
+        # Extract codebase context and detect base URL from Git workspace or local workspace
         codebase_context = ""
-        base_url = "http://localhost:8080"
+        base_url = state.get("target_host") or "http://localhost:8080"
         project_uuid = project.get("uuid") or project.get("id")
         git_repo_url = project.get("git_repo_url", "")
         if project_uuid and git_repo_url:
@@ -177,11 +178,54 @@ class ServicePlannerAgent(BaseAgent):
                     branch=project.get("git_branch", "main")
                 )
                 codebase_context = ws.extract_api_route_context(max_files=25, max_bytes_per_file=6000)
-                base_url = ws.detect_base_url()
+                detected_url = ws.detect_base_url()
+                if detected_url and not state.get("target_host"):
+                    base_url = detected_url
                 if codebase_context:
                     print(f"[ServicePlanner] Injected {len(codebase_context)} chars of API & Route code from Git workspace (Base URL: {base_url}).")
             except Exception as e:
                 print(f"[ServicePlanner] Note: Could not read Git workspace: {e}")
+
+        # Fallback to local workspace if Git workspace did not provide codebase context
+        ws_path = state.get("workspace_path") or project.get("workspace_path")
+        if not codebase_context and ws_path and os.path.isdir(ws_path):
+            try:
+                snippets = []
+                for root, dirs, files in os.walk(ws_path):
+                    dirs[:] = [d for d in dirs if d not in ("venv", ".git", "__pycache__", "node_modules", ".pytest_cache")]
+                    for f in files:
+                        if f.endswith(".py") and not f.startswith("test_"):
+                            fp = os.path.join(root, f)
+                            rel = os.path.relpath(fp, ws_path)
+                            with open(fp, "r", encoding="utf-8", errors="ignore") as sf:
+                                snippets.append(f"--- File: {rel} ---\n" + sf.read(8000))
+                if snippets:
+                    codebase_context = "\n\n".join(snippets[:10])
+                    print(f"[ServicePlanner] Injected {len(codebase_context)} chars from local workspace '{ws_path}'.")
+            except Exception as e:
+                print(f"[ServicePlanner] Note: Could not read local workspace: {e}")
+
+        # Fallback to Postman collection for api_contracts if empty
+        if not contracts and state.get("postman_collection"):
+            try:
+                from app.tools.api_runner.collection_parser import parse_postman_collection
+                col = state["postman_collection"]
+                parsed_eps = parse_postman_collection(col)
+                svc_name = col.get("info", {}).get("name", "ApiService")
+                for ep in parsed_eps:
+                    contracts.append({
+                        "service": svc_name,
+                        "method": ep.get("method", "GET").upper(),
+                        "path": ep.get("path", "/"),
+                        "headers": ep.get("headers", {}),
+                        "sample_request": ep.get("body"),
+                        "sample_response": ep.get("response_example"),
+                        "expected_status_code": ep.get("expected_status_code", 200),
+                    })
+                state["api_contracts"] = contracts
+                print(f"[ServicePlanner] Extracted {len(contracts)} contracts from Postman collection.")
+            except Exception as pe:
+                print(f"[ServicePlanner] Note: Could not parse Postman collection: {pe}")
 
         if not contracts and not codebase_context:
             state.setdefault("errors", []).append(
@@ -297,10 +341,37 @@ Analysis summary:
             if enriched_contracts:
                 state["api_contracts"] = enriched_contracts
 
+        # ── AC -> API -> Code Traceability Mapping (prompt.md Phase 2) ──────
+        try:
+            from app.tools.traceability.mapper import TraceabilityMapper
+            mapper = TraceabilityMapper()
+            mapping = mapper.map(
+                acs=state.get("acceptance_criteria", []),
+                extracted_apis=extracted_apis,
+                postman_contracts=contracts,
+                workspace_path=state.get("workspace_path"),
+                codebase_context=codebase_context,
+            )
+            state["ac_api_code_mapping"] = mapping
+            supported_count = sum(1 for m in mapping if m["implementation_status"] == "SUPPORTED")
+            partial_count = sum(1 for m in mapping if m["implementation_status"] == "PARTIALLY_SUPPORTED")
+            gap_count = sum(1 for m in mapping if m["implementation_status"] == "NOT_IMPLEMENTED")
+            print(f"[ServicePlanner] [OK] AC Traceability Mapping complete: {len(mapping)} ACs mapped "
+                  f"({supported_count} Supported, {partial_count} Partial, {gap_count} Not Implemented).")
+        except Exception as map_err:
+            print(f"[ServicePlanner] [WARN] Traceability mapping note: {map_err}")
+            state["ac_api_code_mapping"] = []
+
+        # Preserve 100% of Acceptance Criteria for downstream test generation & gap detection
         state["current_stage"] = TEST_PLANNING
         self._record(workflow_id, "service_planning", model_name=result.model,
                      latency_ms=result.latency_ms,
-                     output_summary={"services": len(impacted), "extracted_apis": len(extracted_apis)})
+                     output_summary={
+                         "services": len(impacted),
+                         "extracted_apis": len(extracted_apis),
+                         "acceptance_criteria_total": len(state.get("acceptance_criteria", [])),
+                         "traceability_mapped": len(state.get("ac_api_code_mapping", [])),
+                     })
         return state
 
     def _synthesize_test_scenarios(self, ep, acs):

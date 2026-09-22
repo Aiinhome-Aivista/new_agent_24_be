@@ -85,6 +85,9 @@ class WorkflowState(TypedDict, total=False):
     postman_required: Optional[bool]
     clarification_required: Optional[bool]
 
+    # Traceability Mapping
+    ac_api_code_mapping: Optional[list]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Node Wrappers — each node calls the existing agent and returns updated state

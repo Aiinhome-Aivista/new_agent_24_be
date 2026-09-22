@@ -463,6 +463,17 @@ def run_autonomous_verification():
             pass
 
     if not collection_data:
+        sample_path = os.path.join(os.path.dirname(__file__), "..", "..", "data", "collections", "auth_user_service_collection.json")
+        if os.path.exists(sample_path):
+            try:
+                with open(sample_path, "r", encoding="utf-8") as f:
+                    collection_data = json.load(f)
+                    if not collection_name:
+                        collection_name = collection_data.get("info", {}).get("name")
+            except Exception:
+                pass
+
+    if not collection_data:
         # Dynamically scan for any .postman_collection.json in the workspace root
         workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
         import glob as _glob
@@ -474,17 +485,6 @@ def run_autonomous_verification():
                     break
             except Exception:
                 continue
-
-    if not collection_data:
-        sample_path = os.path.join(os.path.dirname(__file__), "..", "..", "data", "collections", "auth_user_service_collection.json")
-        if os.path.exists(sample_path):
-            try:
-                with open(sample_path, "r", encoding="utf-8") as f:
-                    collection_data = json.load(f)
-                    if not collection_name:
-                        collection_name = collection_data.get("info", {}).get("name")
-            except Exception as e:
-                return fail("COLLECTION_ERROR", f"Could not load default collection: {e}")
 
     if not collection_data:
         return fail("VALIDATION_ERROR", "A Postman collection JSON or bundled collection is required.")

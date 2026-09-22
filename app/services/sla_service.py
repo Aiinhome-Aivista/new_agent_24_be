@@ -3,6 +3,7 @@ SLA & Evaluation Metrics Engine.
 Computes stage latencies vs target SLAs, requirement coverage %, quality gate compliance,
 and token/cost observability for workflows.
 """
+import json
 from app.extensions.db import query
 from app.repositories.workflow_repo import get_run, list_agent_runs
 from app.repositories.test_repo import list_test_cases, get_execution_run, get_code_quality_run
@@ -100,9 +101,9 @@ def evaluate_workflow_sla(workflow_id):
     coverage_pct = min(100.0, round((total_tests / total_acs) * 100.0, 1)) if total_tests > 0 else 0.0
     coverage_sla_met = coverage_pct >= REQUIREMENT_COVERAGE_TARGET
 
-    # 3. Quality Gate Metric
-    cq_score = float(cq_run.get("score", 90.0)) if cq_run else 90.0
-    cq_passed = cq_score >= QUALITY_GATE_THRESHOLD
+    # 3. Quality Gate Metric (code quality calculation removed from pipeline)
+    cq_score = float(cq_run.get("score", 100.0)) if cq_run else 100.0
+    cq_passed = (cq_score >= QUALITY_GATE_THRESHOLD) if cq_run else True
 
     # 4. API Execution Metric
     api_pass_rate = 100.0

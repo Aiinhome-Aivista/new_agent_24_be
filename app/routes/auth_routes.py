@@ -10,6 +10,7 @@ auth_bp = Blueprint("auth", __name__)
 
 
 @auth_bp.route("/login", methods=["POST"])
+@auth_bp.route("/auth/login", methods=["POST"])
 def login():
     body = request.get_json(silent=True) or {}
     email, password = body.get("email"), body.get("password")
@@ -32,6 +33,7 @@ def login():
 
 
 @auth_bp.route("/refresh", methods=["POST"])
+@auth_bp.route("/auth/refresh", methods=["POST"])
 def refresh():
     body = request.get_json(silent=True) or {}
     token = body.get("refresh_token", "")

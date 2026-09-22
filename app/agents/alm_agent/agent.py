@@ -1,4 +1,6 @@
+import os
 import uuid
+import shutil
 from app.agents.base import BaseAgent
 from app.tools.alm.adapter import get_alm_adapter
 from app.guardrails.engine import check_alm
@@ -79,18 +81,10 @@ class AlmAgent(BaseAgent):
         if evidence_row:
             set_evidence_status(evidence_row.get("uuid"), "ATTACHED")
 
-        # Clean up local temporary .docx file if still present
-        if result.get("status") == "SUCCESS" and not result.get("is_mock") and docx_path:
-            import os
-            try:
-                if os.path.isfile(docx_path):
-                    os.remove(docx_path)
-            except Exception:
-                pass
+        # Preserve generated docx evidence artifact in evidence_output for auditing and UI download
 
         # Clean up local temporary generated_tests staging folder for this completed workflow
         try:
-            import shutil
             test_dir = os.path.join("evidence_output", "generated_tests", workflow_id)
             if os.path.isdir(test_dir):
                 shutil.rmtree(test_dir, ignore_errors=True)

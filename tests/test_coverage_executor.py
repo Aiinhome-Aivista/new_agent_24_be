@@ -86,10 +86,10 @@ class TestParseCoverageJson:
 
         result = _parse_coverage_json(str(report_path), "/app")
 
-        assert result["line_coverage_pct"] == 90.0  # 90 / 100 = 90%
-        assert result["branch_coverage_pct"] == 90.0  # 45 / 50 = 90%
-        assert result["num_statements"] == 100
-        assert result["num_missing"] == 10
+        assert result["line_coverage_pct"] == pytest.approx(91.7, abs=0.5)  # 55 / 60 = 91.7% (scoped to app source file)
+        assert result["branch_coverage_pct"] == pytest.approx(93.3, abs=0.5)  # 28 / 30 = 93.3% (scoped to app source file)
+        assert result["num_statements"] == 60  # scoped app source file statements
+        assert result["num_missing"] == 5      # scoped app source file missing lines
         assert len(result["covered_files"]) == 1
         assert result["covered_files"][0].line_coverage_pct == pytest.approx(91.7, abs=0.5)
 

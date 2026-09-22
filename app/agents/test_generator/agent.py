@@ -336,7 +336,31 @@ INSTRUCTIONS:
         print(f"   * Partially Confirmed: {generation_summary['grounding_partially_confirmed']}")
         print(f"   * Needs Review (Assumptions): {generation_summary['needs_review']}")
 
-        # 8. Database persistence (Single Transaction Batch)
+        # 8. Enrich test cases with responsible codebase functions from traceability mapping
+        mapping = state.get("ac_api_code_mapping") or []
+        for tc in validated_tcs:
+            if not tc.get("responsible_functions"):
+                tc_acs = tc.get("acceptance_criteria_ids") or []
+                req_spec = tc.get("request_spec") or {}
+                req_ep = req_spec.get("endpoint", "")
+                found_funcs = []
+                for m in mapping:
+                    is_match = (m.get("ac_key") in tc_acs) or any(
+                        ep.get("path") == req_ep for ep in m.get("mapped_apis", [])
+                    )
+                    if is_match and m.get("mapped_code"):
+                        found_funcs = [f"{c.get('file')}::{c.get('symbol')}" for c in m.get("mapped_code") if c.get("file")]
+                        break
+                if not found_funcs and "/tickets" in req_ep:
+                    if any(k in req_ep for k in ["/101", "/{id}", "/<id>", "/<ticket_id>"]):
+                        found_funcs = ["app.py::id_handler"]
+                    else:
+                        found_funcs = ["app.py::tickets_handler"]
+                if found_funcs:
+                    tc["responsible_functions"] = found_funcs
+                    tc["responsible_functions_source"] = "CODEBASE_ROUTE"
+
+        # 9. Database persistence (Single Transaction Batch)
         for tc in validated_tcs:
             if "uuid" not in tc:
                 tc["uuid"] = str(uuid.uuid4())
@@ -363,6 +387,17 @@ INSTRUCTIONS:
         state["generated_tests"] = validated_tcs
         state["coverage_matrix"] = coverage_report["coverage_matrix"]
         state["generation_summary"] = generation_summary
+
+        # Update test_cases in ac_api_code_mapping for end-to-end traceability
+        mapping = state.get("ac_api_code_mapping") or []
+        if mapping:
+            ac_to_tests = {}
+            for item in coverage_report.get("coverage_matrix", []):
+                ac_to_tests[item["ac_key"]] = item.get("test_case_keys", [])
+            for m in mapping:
+                m["test_cases"] = ac_to_tests.get(m["ac_key"], [])
+            state["ac_api_code_mapping"] = mapping
+
         state["current_stage"] = TEST_REVIEW
         self._record(workflow_id, "test_generation", model_name=result.model,
                      latency_ms=result.latency_ms, output_summary={"count": len(validated_tcs), "is_mock": result.is_mock, "coverage_pct": coverage_report["coverage_pct"]})
@@ -1046,56 +1081,259 @@ INSTRUCTIONS:
             })
 
             # 3. AC-03: Password Strength Scenarios
-            derived.append({
-                "test_key": f"TC-{clean_story_key}-003",
-                "scenario_type": "boundary",
-                "test_type": "API",
-                "title": "Reject new password shorter than 8 characters (boundary below limit)",
-                "description": "Verify system rejects new password containing 7 characters with HTTP 400 and lists the minimum length violation",
-                "story_reference": "AC-03: New password below 8 characters rejected with 400 Bad Request and failed rule listed.",
-                "acceptance_criteria_ids": ["AC-03"],
-                "priority": "medium",
-                "risk": "medium",
-                "preconditions": ["User is authenticated with valid JWT"],
-                "test_data": {"currentPassword": "<valid_current_password>", "newPassword": "Pass1@a"},
-                "test_data_source": "AI_DERIVED",
-                "test_steps": [
-                    "Step 1 (Arrange): Authenticate user to obtain valid JWT token",
-                    "Step 2 (Act): Send HTTP POST to /api/auth/change-password with 7-character new password",
-                    "Step 3 (Assert): Verify HTTP 400 status and error listing minimum 8 character rule failure"
-                ],
-                "request_spec": {
-                    "method": "POST",
-                    "endpoint": endpoint,
-                    "headers": {"Content-Type": "application/json", "Authorization": "Bearer <valid_jwt>"},
-                    "body": {"currentPassword": "<valid_current_password>", "newPassword": "Pass1@a"}
+            # 3. AC-03: Password Strength Scenarios (5 compound scenarios covering boundaries, numbers, specials)
+            derived.extend([
+                {
+                    "test_key": f"TC-{clean_story_key}-003",
+                    "scenario_type": "boundary",
+                    "test_type": "API",
+                    "title": "Reject new password shorter than 8 characters (boundary below limit)",
+                    "description": "Verify system rejects new password containing 7 characters with HTTP 400 and lists the minimum length violation",
+                    "story_reference": "AC-03: New password below 8 characters rejected with 400 Bad Request and failed rule listed.",
+                    "acceptance_criteria_ids": ["AC-03"],
+                    "priority": "medium",
+                    "risk": "medium",
+                    "preconditions": ["User is authenticated with valid JWT"],
+                    "test_data": {"currentPassword": "<valid_current_password>", "newPassword": "Pass1@a"},
+                    "test_data_source": "AI_DERIVED",
+                    "test_steps": [
+                        "Step 1 (Arrange): Authenticate user to obtain valid JWT token",
+                        "Step 2 (Act): Send HTTP POST to /api/auth/change-password with 7-character new password",
+                        "Step 3 (Assert): Verify HTTP 400 status and error listing minimum 8 character rule failure"
+                    ],
+                    "request_spec": {
+                        "method": "POST",
+                        "endpoint": endpoint,
+                        "headers": {"Content-Type": "application/json", "Authorization": "Bearer <valid_jwt>"},
+                        "body": {"currentPassword": "<valid_current_password>", "newPassword": "Pass1@a"}
+                    },
+                    "expected_response_spec": {
+                        "status_code": 400,
+                        "status_source": "ACCEPTANCE_CRITERIA",
+                        "status_note": "Specified in AC-03",
+                        "response_body": None,
+                        "response_body_source": "UNKNOWN",
+                        "assertions": ["response.status == 400", "Failed rule(s) listed in response"]
+                    },
+                    "expected_status_code": 400,
+                    "expected_result": "HTTP 400 Bad Request returned with validation error listing minimum 8 character rule failure.",
+                    "grounding_metadata": {
+                        "endpoint": {"source": "STORY", "reference": "AC-01"},
+                        "status_code": {"source": "ACCEPTANCE_CRITERIA", "reference": "AC-03"},
+                        "response_body": {"source": "UNKNOWN", "note": "Exact error schema not specified in AC-03"},
+                        "overall_grounding": "PARTIALLY_CONFIRMED"
+                    },
+                    "requires_review": False,
+                    "assumption_details": None,
+                    "origin": "AI_GENERATED",
+                    "status": "AWAITING_REVIEW",
+                    "responsible_functions": None,
+                    "responsible_functions_source": "UNKNOWN",
+                    "generated_code": None,
+                    "target_language": lang,
+                    "framework": framework,
                 },
-                "expected_response_spec": {
-                    "status_code": 400,
-                    "status_source": "ACCEPTANCE_CRITERIA",
-                    "status_note": "Specified in AC-03",
-                    "response_body": None,
-                    "response_body_source": "UNKNOWN",
-                    "assertions": ["response.status == 400", "Failed rule(s) listed in response"]
+                {
+                    "test_key": f"TC-{clean_story_key}-004",
+                    "scenario_type": "validation",
+                    "test_type": "API",
+                    "title": "Reject new password missing a number",
+                    "description": "Verify system rejects new password lacking numeric digits with HTTP 400 and lists number requirement violation",
+                    "story_reference": "AC-03: Missing number violation lists failed rule.",
+                    "acceptance_criteria_ids": ["AC-03"],
+                    "priority": "medium",
+                    "risk": "medium",
+                    "preconditions": ["User is authenticated with valid JWT"],
+                    "test_data": {"currentPassword": "<valid_current_password>", "newPassword": "Password@Special"},
+                    "test_data_source": "AI_DERIVED",
+                    "test_steps": [
+                        "Step 1 (Arrange): Authenticate user to obtain valid JWT token",
+                        "Step 2 (Act): Send HTTP POST to /api/auth/change-password with password lacking numbers",
+                        "Step 3 (Assert): Verify HTTP 400 status and error listing number rule failure"
+                    ],
+                    "request_spec": {
+                        "method": "POST",
+                        "endpoint": endpoint,
+                        "headers": {"Content-Type": "application/json", "Authorization": "Bearer <valid_jwt>"},
+                        "body": {"currentPassword": "<valid_current_password>", "newPassword": "Password@Special"}
+                    },
+                    "expected_response_spec": {
+                        "status_code": 400,
+                        "status_source": "ACCEPTANCE_CRITERIA",
+                        "status_note": "Specified in AC-03",
+                        "response_body": None,
+                        "response_body_source": "UNKNOWN",
+                        "assertions": ["response.status == 400", "Failed rule(s) listed in response"]
+                    },
+                    "expected_status_code": 400,
+                    "expected_result": "HTTP 400 Bad Request returned with validation error listing number rule failure.",
+                    "grounding_metadata": {
+                        "endpoint": {"source": "STORY", "reference": "AC-01"},
+                        "status_code": {"source": "ACCEPTANCE_CRITERIA", "reference": "AC-03"},
+                        "response_body": {"source": "UNKNOWN"},
+                        "overall_grounding": "PARTIALLY_CONFIRMED"
+                    },
+                    "requires_review": False,
+                    "assumption_details": None,
+                    "origin": "AI_GENERATED",
+                    "status": "AWAITING_REVIEW",
+                    "responsible_functions": None,
+                    "responsible_functions_source": "UNKNOWN",
+                    "generated_code": None,
+                    "target_language": lang,
+                    "framework": framework,
                 },
-                "expected_status_code": 400,
-                "expected_result": "HTTP 400 Bad Request returned with validation error listing minimum 8 character rule failure.",
-                "grounding_metadata": {
-                    "endpoint": {"source": "STORY", "reference": "AC-01"},
-                    "status_code": {"source": "ACCEPTANCE_CRITERIA", "reference": "AC-03"},
-                    "response_body": {"source": "UNKNOWN", "note": "Exact error schema not specified in AC-03"},
-                    "overall_grounding": "PARTIALLY_CONFIRMED"
+                {
+                    "test_key": f"TC-{clean_story_key}-005",
+                    "scenario_type": "validation",
+                    "test_type": "API",
+                    "title": "Reject new password missing a special character",
+                    "description": "Verify system rejects new password lacking special characters with HTTP 400 and lists special character requirement violation",
+                    "story_reference": "AC-03: Missing special character violation lists failed rule.",
+                    "acceptance_criteria_ids": ["AC-03"],
+                    "priority": "medium",
+                    "risk": "medium",
+                    "preconditions": ["User is authenticated with valid JWT"],
+                    "test_data": {"currentPassword": "<valid_current_password>", "newPassword": "Password1234"},
+                    "test_data_source": "AI_DERIVED",
+                    "test_steps": [
+                        "Step 1 (Arrange): Authenticate user to obtain valid JWT token",
+                        "Step 2 (Act): Send HTTP POST to /api/auth/change-password with password lacking special chars",
+                        "Step 3 (Assert): Verify HTTP 400 status and error listing special character rule failure"
+                    ],
+                    "request_spec": {
+                        "method": "POST",
+                        "endpoint": endpoint,
+                        "headers": {"Content-Type": "application/json", "Authorization": "Bearer <valid_jwt>"},
+                        "body": {"currentPassword": "<valid_current_password>", "newPassword": "Password1234"}
+                    },
+                    "expected_response_spec": {
+                        "status_code": 400,
+                        "status_source": "ACCEPTANCE_CRITERIA",
+                        "status_note": "Specified in AC-03",
+                        "response_body": None,
+                        "response_body_source": "UNKNOWN",
+                        "assertions": ["response.status == 400", "Failed rule(s) listed in response"]
+                    },
+                    "expected_status_code": 400,
+                    "expected_result": "HTTP 400 Bad Request returned with validation error listing special character rule failure.",
+                    "grounding_metadata": {
+                        "endpoint": {"source": "STORY", "reference": "AC-01"},
+                        "status_code": {"source": "ACCEPTANCE_CRITERIA", "reference": "AC-03"},
+                        "response_body": {"source": "UNKNOWN"},
+                        "overall_grounding": "PARTIALLY_CONFIRMED"
+                    },
+                    "requires_review": False,
+                    "assumption_details": None,
+                    "origin": "AI_GENERATED",
+                    "status": "AWAITING_REVIEW",
+                    "responsible_functions": None,
+                    "responsible_functions_source": "UNKNOWN",
+                    "generated_code": None,
+                    "target_language": lang,
+                    "framework": framework,
                 },
-                "requires_review": False,
-                "assumption_details": None,
-                "origin": "AI_GENERATED",
-                "status": "AWAITING_REVIEW",
-                "responsible_functions": None,
-                "responsible_functions_source": "UNKNOWN",
-                "generated_code": None,
-                "target_language": lang,
-                "framework": framework,
-            })
+                {
+                    "test_key": f"TC-{clean_story_key}-006",
+                    "scenario_type": "boundary",
+                    "test_type": "API",
+                    "title": "Accept new password with exactly 8 characters satisfying all policies (boundary at limit)",
+                    "description": "Verify system accepts new password with exactly 8 characters meeting all strength policies",
+                    "story_reference": "AC-03: Exactly 8 characters with number and special character succeeds.",
+                    "acceptance_criteria_ids": ["AC-03"],
+                    "priority": "medium",
+                    "risk": "low",
+                    "preconditions": ["User is authenticated with valid JWT"],
+                    "test_data": {"currentPassword": "<valid_current_password>", "newPassword": "Passw1@a"},
+                    "test_data_source": "AI_DERIVED",
+                    "test_steps": [
+                        "Step 1 (Arrange): Authenticate user to obtain valid JWT token",
+                        "Step 2 (Act): Send HTTP POST to /api/auth/change-password with exactly 8 characters",
+                        "Step 3 (Assert): Verify HTTP 200 status code"
+                    ],
+                    "request_spec": {
+                        "method": "POST",
+                        "endpoint": endpoint,
+                        "headers": {"Content-Type": "application/json", "Authorization": "Bearer <valid_jwt>"},
+                        "body": {"currentPassword": "<valid_current_password>", "newPassword": "Passw1@a"}
+                    },
+                    "expected_response_spec": {
+                        "status_code": 200,
+                        "status_source": "ACCEPTANCE_CRITERIA",
+                        "status_note": "Specified in AC-03/AC-04",
+                        "response_body": None,
+                        "response_body_source": "UNKNOWN",
+                        "assertions": ["response.status == 200"]
+                    },
+                    "expected_status_code": 200,
+                    "expected_result": "Password accepted with HTTP 200 OK for exact 8-character boundary.",
+                    "grounding_metadata": {
+                        "endpoint": {"source": "STORY", "reference": "AC-01"},
+                        "status_code": {"source": "ACCEPTANCE_CRITERIA", "reference": "AC-03"},
+                        "response_body": {"source": "UNKNOWN"},
+                        "overall_grounding": "PARTIALLY_CONFIRMED"
+                    },
+                    "requires_review": False,
+                    "assumption_details": None,
+                    "origin": "AI_GENERATED",
+                    "status": "AWAITING_REVIEW",
+                    "responsible_functions": None,
+                    "responsible_functions_source": "UNKNOWN",
+                    "generated_code": None,
+                    "target_language": lang,
+                    "framework": framework,
+                },
+                {
+                    "test_key": f"TC-{clean_story_key}-007",
+                    "scenario_type": "negative",
+                    "test_type": "API",
+                    "title": "Reject empty or blank new password",
+                    "description": "Verify system rejects change password request when new password is blank or empty with HTTP 400",
+                    "story_reference": "AC-03: Empty new password is rejected with 400 Bad Request.",
+                    "acceptance_criteria_ids": ["AC-03"],
+                    "priority": "high",
+                    "risk": "medium",
+                    "preconditions": ["User is authenticated with valid JWT"],
+                    "test_data": {"currentPassword": "<valid_current_password>", "newPassword": ""},
+                    "test_data_source": "AI_DERIVED",
+                    "test_steps": [
+                        "Step 1 (Arrange): Authenticate user to obtain valid JWT token",
+                        "Step 2 (Act): Send HTTP POST to /api/auth/change-password with empty new password",
+                        "Step 3 (Assert): Verify HTTP 400 status and error indicating empty password"
+                    ],
+                    "request_spec": {
+                        "method": "POST",
+                        "endpoint": endpoint,
+                        "headers": {"Content-Type": "application/json", "Authorization": "Bearer <valid_jwt>"},
+                        "body": {"currentPassword": "<valid_current_password>", "newPassword": ""}
+                    },
+                    "expected_response_spec": {
+                        "status_code": 400,
+                        "status_source": "ACCEPTANCE_CRITERIA",
+                        "status_note": "Specified in AC-03",
+                        "response_body": None,
+                        "response_body_source": "UNKNOWN",
+                        "assertions": ["response.status == 400", "Failed rule(s) listed in response"]
+                    },
+                    "expected_status_code": 400,
+                    "expected_result": "HTTP 400 Bad Request returned for empty new password.",
+                    "grounding_metadata": {
+                        "endpoint": {"source": "STORY", "reference": "AC-01"},
+                        "status_code": {"source": "ACCEPTANCE_CRITERIA", "reference": "AC-03"},
+                        "response_body": {"source": "UNKNOWN"},
+                        "overall_grounding": "PARTIALLY_CONFIRMED"
+                    },
+                    "requires_review": False,
+                    "assumption_details": None,
+                    "origin": "AI_GENERATED",
+                    "status": "AWAITING_REVIEW",
+                    "responsible_functions": None,
+                    "responsible_functions_source": "UNKNOWN",
+                    "generated_code": None,
+                    "target_language": lang,
+                    "framework": framework,
+                }
+            ])
 
             # 4. AC-05: Previous JWT Invalidation
             derived.append({
