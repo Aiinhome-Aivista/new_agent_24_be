@@ -87,6 +87,7 @@ class WorkflowState(TypedDict, total=False):
 
     # Traceability Mapping
     ac_api_code_mapping: Optional[list]
+    execution_trace: Optional[Dict[str, Any]]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -97,15 +98,58 @@ def _make_agent_node(agent_instance, stage_name: str):
     """
     Factory that creates a LangGraph node function wrapping an existing agent.
     The node calls agent.run(workflow_id, state) exactly as the orchestrator does.
+    Instrumented with ExecutionTrace for full auditability.
     """
     def node_fn(state: WorkflowState) -> WorkflowState:
         workflow_id = state.get("workflow_id", "")
         print(f"[LangGraph] Node [{stage_name}] — workflow {str(workflow_id)[:8]}")
+        trace = None
+        stage_trace = None
+        trace_stage_name = stage_name.lower()
+        try:
+            from app.observability.execution_trace import (
+                ExecutionTrace, SM_TO_TRACE_STAGE,
+                determine_stage_status, extract_stage_input_summary,
+                extract_stage_output_summary,
+            )
+            raw_trace = state.get("execution_trace")
+            if raw_trace and isinstance(raw_trace, dict):
+                trace = ExecutionTrace.from_dict(raw_trace)
+            else:
+                trace = ExecutionTrace(run_id=workflow_id)
+            trace_stage_name = SM_TO_TRACE_STAGE.get(stage_name, stage_name.lower())
+            stage_trace = trace.start_stage(
+                trace_stage_name,
+                input_summary=extract_stage_input_summary(trace_stage_name, state),
+            )
+            stage_trace.add_tool_call(agent_instance.name)
+        except Exception as te:
+            print(f"[LangGraph] Trace start skipped: {te}")
+            trace = None
+            stage_trace = None
+
         try:
             updated = agent_instance.run(workflow_id, dict(state))
+            if trace and stage_trace:
+                try:
+                    trace_status = determine_stage_status(trace_stage_name, updated)
+                    trace.complete_stage(
+                        stage_trace,
+                        status=trace_status,
+                        output_summary=extract_stage_output_summary(trace_stage_name, updated),
+                    )
+                    updated["execution_trace"] = trace.serialize()
+                except Exception as te:
+                    print(f"[LangGraph] Trace complete skipped: {te}")
             return updated
         except Exception as e:
             print(f"[LangGraph] Node [{stage_name}] raised exception: {e}")
+            if trace and stage_trace:
+                try:
+                    stage_trace.fail(error_message=str(e))
+                    state["execution_trace"] = trace.serialize()
+                except Exception:
+                    pass
             state = dict(state)
             state.setdefault("errors", []).append({"agent": stage_name, "message": str(e)})
             state["status"] = "FAILED"

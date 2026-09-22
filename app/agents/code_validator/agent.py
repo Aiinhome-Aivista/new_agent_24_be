@@ -29,6 +29,19 @@ class CodeValidatorAgent(BaseAgent):
         # 1. Real Unit Test Execution + Code Coverage (pytest + coverage.py)
         # -------------------------------------------------------------------
         unit_test_result = self._run_unit_tests_with_coverage(workflow_id, state)
+        unit_test_result["trace_data"] = {
+            "test_command": unit_test_result.get("test_command", "pytest --cov"),
+            "test_file_path": self._find_generated_test_file(workflow_id, state) or "N/A",
+            "workspace": state.get("workspace_path", "N/A"),
+            "total_tests": unit_test_result.get("total_tests", 0),
+            "executed": unit_test_result.get("executed", False),
+            "passed": unit_test_result.get("passed_tests", 0),
+            "failed": unit_test_result.get("failed_tests", 0),
+            "skipped": unit_test_result.get("skipped_tests", 0),
+            "errors": unit_test_result.get("error_tests", 0),
+            "exit_code": unit_test_result.get("exit_code", 0 if unit_test_result.get("failed_tests", 0) == 0 else 1),
+            "execution_duration": unit_test_result.get("execution_time_seconds", 0.0),
+        }
         state["unit_test_execution"] = unit_test_result
 
         # Merge real coverage into state so evidence generator can use it

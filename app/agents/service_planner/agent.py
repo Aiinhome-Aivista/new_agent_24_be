@@ -362,6 +362,17 @@ Analysis summary:
             print(f"[ServicePlanner] [WARN] Traceability mapping note: {map_err}")
             state["ac_api_code_mapping"] = []
 
+        # Add trace_data to service_plan
+        num_source_files = len(codebase_context.split("--- File: ")) - 1 if "--- File: " in codebase_context else (1 if codebase_context else 0)
+        service_plan["trace_data"] = {
+            "repository_id": project.get("git_repo_url") or project.get("uuid") or project.get("id") or "N/A",
+            "workspace": state.get("workspace_path") or project.get("workspace_path") or "N/A",
+            "source_files_analyzed": max(num_source_files, 0),
+            "routes_discovered": len(extracted_apis),
+            "detected_base_url": base_url,
+        }
+        state["service_plan"] = service_plan
+
         # Preserve 100% of Acceptance Criteria for downstream test generation & gap detection
         state["current_stage"] = TEST_PLANNING
         self._record(workflow_id, "service_planning", model_name=result.model,

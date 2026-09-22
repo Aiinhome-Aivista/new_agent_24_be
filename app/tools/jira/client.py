@@ -414,7 +414,7 @@ class JiraClient:
                     {
                         "type": "paragraph",
                         "content": [
-                            {"type": "text", "text": evidence_data.get("decision_summary", "All test assertions passed and all returned payloads conform strictly to user-story acceptance criteria.")}
+                            {"type": "text", "text": evidence_data.get("decision_summary", f"{passed_eps}/{total_eps} test scenarios passed. Detailed telemetry attached.")}
                         ]
                     }
                 ]

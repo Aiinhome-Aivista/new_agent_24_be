@@ -281,6 +281,47 @@ def workflow_sla(workflow_id):
     return ok({"sla": sla_data})
 
 
+@workflow_bp.route("/workflows/<workflow_id>/trace", methods=["GET"])
+@require_auth
+@require_permission("workflow.read")
+def workflow_trace(workflow_id):
+    run = get_run(workflow_id)
+    trace_data = None
+
+    # 1. Check in state_json
+    if run:
+        state = run.get("state_json") or {}
+        trace_data = state.get("execution_trace")
+        if not trace_data:
+            evidence_data = state.get("evidence_data") or state.get("evidence") or {}
+            if isinstance(evidence_data, dict):
+                trace_data = evidence_data.get("execution_trace")
+
+    # 2. Check on disk in evidence_output
+    if not trace_data:
+        ev_dir = "./evidence_output"
+        if os.path.isdir(ev_dir):
+            candidates = [
+                os.path.join(ev_dir, f"{workflow_id}_execution_trace.json"),
+            ]
+            for f in os.listdir(ev_dir):
+                if f.endswith("_execution_trace.json") and workflow_id in f:
+                    candidates.append(os.path.join(ev_dir, f))
+            for cand in candidates:
+                if os.path.isfile(cand):
+                    try:
+                        with open(cand, "r", encoding="utf-8") as fp:
+                            trace_data = json.load(fp)
+                            break
+                    except Exception:
+                        pass
+
+    if not trace_data:
+        return fail("NOT_FOUND", "Execution trace not found for workflow", 404)
+
+    return ok({"workflow_id": workflow_id, "execution_trace": trace_data})
+
+
 @workflow_bp.route("/agent-runs", methods=["GET"])
 @require_auth
 @require_permission("workflow.read")

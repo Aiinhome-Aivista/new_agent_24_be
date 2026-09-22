@@ -97,7 +97,17 @@ class AlmAgent(BaseAgent):
         except Exception:
             pass
 
-        state["alm"] = {"external_ref": result["external_ref"], "is_mock": result["is_mock"]}
+        state["alm"] = {
+            "external_ref": result["external_ref"],
+            "is_mock": result["is_mock"],
+            "trace_data": {
+                "approval_status": "APPROVED" if approval_rec else "PENDING",
+                "artifact_attached": bool(docx_path and os.path.isfile(docx_path)),
+                "jira_issue_id": story.get("external_key", "UNKNOWN"),
+                "attachment_status": result.get("status", "ATTACHED"),
+                "writeback_status": "SUCCESS" if result.get("status") in ("ATTACHED", "SUCCESS") else ("MOCK_SUCCESS" if result.get("is_mock") else "UNKNOWN"),
+            },
+        }
         state["current_stage"] = DONE
         state["status"] = COMPLETED
         self._record(workflow_id, "alm_attachment", tool_name="alm_adapter",

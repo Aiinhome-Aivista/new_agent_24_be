@@ -29,4 +29,4 @@ def redact(payload):
     """Never log secrets. Shallow redaction for dicts headed to logs/spans/audit."""
     if not isinstance(payload, dict):
         return payload
-    return {k: ("***REDACTED***" if k.lower() in _REDACT else v) for k, v in payload.items()}
+    return {k: ("***REDACTED***" if any(r in k.lower() for r in _REDACT) else v) for k, v in payload.items()}

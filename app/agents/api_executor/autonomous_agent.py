@@ -945,7 +945,7 @@ Generate all {len(acceptance_criteria)} executable test scenarios in valid JSON 
         if total_deviations == 0 and run_result.failed == 0:
             summary_recommendation = "API conforms"
             decision_status = "Ready for Approval"
-            decision_summary = "All test assertions passed and all returned payloads conform strictly to user-story acceptance criteria without anomalies or extraneous data."
+            decision_summary = f"All {run_result.passed} API scenarios passed. All returned payloads conform to user-story acceptance criteria without anomalies."
         elif critical_count > 0 or run_result.failed > 0:
             summary_recommendation = "API deviates"
             decision_status = "Action Required"

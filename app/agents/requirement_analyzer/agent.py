@@ -111,6 +111,18 @@ Acceptance Criteria:
                     desc = s.get("desc") or s.get("description") if isinstance(s, dict) else str(s)
                     print(f"     • [{sid}] {desc}")
 
+        story = state.get("story", {})
+        raw_story_acs = story.get("acceptance_criteria", [])
+        ac_count_rec = len(raw_story_acs) if isinstance(raw_story_acs, list) else len(acs)
+        analysis["trace_data"] = {
+            "jira_story_id": story.get("external_key") or story.get("id") or "N/A",
+            "ac_count_received": ac_count_rec,
+            "ac_count_retained": len(acs),
+            "normalized_ac_ids": [
+                (ac.get("ac_id") or ac.get("id") or f"AC-{i+1:02d}") if isinstance(ac, dict) else f"AC-{i+1:02d}"
+                for i, ac in enumerate(acs)
+            ],
+        }
         state["analysis"] = analysis
         state["current_stage"] = SERVICE_PLANNING
         self._record(workflow_id, "requirement_analysis", model_name=result.model,

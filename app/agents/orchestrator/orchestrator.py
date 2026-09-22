@@ -9,7 +9,13 @@ LangGraph Integration:
     LangGraph StateGraph (app/workflows/langgraph_workflow.py). This provides proper
     state management, conditional edge routing, and graph visualization.
     Falls back transparently to the existing while-loop if langgraph is unavailable.
+
+Execution Trace:
+    Every pipeline run now generates a structured execution trace (execution_trace.json)
+    that records stage timing, inputs, outputs, status, artifacts, and metric provenance.
+    The trace is an OBSERVER — it does not replace or alter the existing workflow.
 """
+import os
 from app.agents.requirement_analyzer.agent import RequirementAnalyzerAgent
 from app.agents.service_planner.agent import ServicePlannerAgent
 from app.agents.test_generator.agent import TestGeneratorAgent
@@ -23,6 +29,13 @@ from app.repositories.workflow_repo import update_run
 from app.repositories.evidence_repo import create_approval
 from app.audit.audit_log import record as audit
 from app.workflows import state_machine as sm
+from app.observability.execution_trace import (
+    ExecutionTrace, TraceStatus, ArtifactRef,
+    SM_TO_TRACE_STAGE, STAGE_HUMAN_REVIEW,
+    STAGE_UNIT_TEST_EXECUTION, STAGE_CODE_COVERAGE,
+    determine_stage_status, extract_stage_input_summary,
+    extract_stage_output_summary,
+)
 
 # Attempt to load LangGraph workflow at import time (non-blocking)
 _langgraph_workflow = None
@@ -121,7 +134,12 @@ class Orchestrator:
             return self._advance_via_loop(workflow_id, state)
 
     def _advance_via_loop(self, workflow_id, state):
-        """Original while-loop state machine — always-available fallback."""
+        """Original while-loop state machine — always-available fallback.
+        Now instrumented with ExecutionTrace for full auditability."""
+        # ── Initialize Execution Trace ────────────────────────────────────
+        trace = self._get_or_create_trace(workflow_id, state)
+        state["execution_trace"] = trace.serialize()  # initial snapshot
+
         guard = 0
         while guard < 30:
             guard += 1
@@ -135,8 +153,16 @@ class Orchestrator:
             # Human checkpoint: create a pending approval and stop.
             if stage in sm.HUMAN_CHECKPOINTS:
                 print(f"[ORCHESTRATOR] Halting at human checkpoint: {stage}")
+                # Record human review stage in trace
+                trace_stage_name = SM_TO_TRACE_STAGE.get(stage, STAGE_HUMAN_REVIEW)
+                ht = trace.start_stage(trace_stage_name,
+                    input_summary={"checkpoint": stage, "review_required": True})
+                ht.complete(status=TraceStatus.AWAITING_HUMAN_APPROVAL,
+                    output_summary={"review_status": "PENDING", "checkpoint": stage})
+
                 state["status"] = STAGE_STATUS.get(stage, sm.WAITING_FOR_REVIEW)
                 self._open_checkpoint(workflow_id, stage, state)
+                state["execution_trace"] = trace.serialize()
                 self._persist(workflow_id, state)
                 break
 
@@ -151,12 +177,32 @@ class Orchestrator:
             print(f"[ORCHESTRATOR] >>> Executing Stage: {stage} (Workflow: {workflow_id[:8]})")
             print(f"{'='*75}")
 
+            # ── Start trace for this stage ────────────────────────────────
+            trace_stage_name = SM_TO_TRACE_STAGE.get(stage, stage.lower())
+            stage_trace = trace.start_stage(
+                trace_stage_name,
+                input_summary=extract_stage_input_summary(trace_stage_name, state),
+            )
+            stage_trace.add_tool_call(agent.name)
+
             # Mark as RUNNING and persist current stage
             state["status"] = sm.RUNNING
             self._persist(workflow_id, state)
 
             state = agent.run(workflow_id, state)
             self._persist(workflow_id, state)
+
+            # ── Complete trace for this stage ─────────────────────────────
+            trace_status = determine_stage_status(trace_stage_name, state)
+            trace.complete_stage(
+                stage_trace,
+                status=trace_status,
+                output_summary=extract_stage_output_summary(trace_stage_name, state),
+            )
+
+            # For CODE_VALIDATION stage, also record coverage as a separate trace stage
+            if stage == sm.CODE_VALIDATION:
+                self._record_coverage_trace(trace, state)
 
             if state.get("status") in sm.EXCEPTION:
                 print(f"[ORCHESTRATOR] Stage {stage} encountered an exception. Status: {state.get('status')}")
@@ -174,6 +220,9 @@ class Orchestrator:
                     self._persist(workflow_id, state)
                     break
 
+        # ── Finalize and persist trace ────────────────────────────────────
+        self._finalize_trace(trace, state)
+        state["execution_trace"] = trace.serialize()
         self._persist(workflow_id, state)
         return state
 
@@ -243,3 +292,99 @@ class Orchestrator:
                    error_message=(errors[-1]["message"] if errors and status in sm.EXCEPTION else None))
         audit("workflow_transition", workflow_id=workflow_id, agent=self.name, status=status,
               metadata={"stage": stage})
+
+    # ── Execution Trace Helpers ───────────────────────────────────────────
+
+    def _get_or_create_trace(self, workflow_id, state):
+        """Create or resume an ExecutionTrace for this workflow run."""
+        # Reuse existing evidence key as run_id if available
+        evidence = state.get("evidence", {})
+        run_id = evidence.get("evidence_key")
+        if not run_id:
+            import uuid as _uuid
+            run_id = f"EVID-{_uuid.uuid4().hex[:8]}"
+        return ExecutionTrace(run_id=run_id)
+
+    def _record_coverage_trace(self, trace, state):
+        """Record a dedicated coverage trace stage from CODE_VALIDATION results."""
+        rc = state.get("real_code_coverage", {})
+        cov_stage = trace.start_stage(
+            STAGE_CODE_COVERAGE,
+            input_summary={
+                "coverage_tool": "pytest-cov / coverage.py",
+                "generated_test_path": (state.get("code_generation") or {}).get("files_written", [{}])[0].get("file_path", "N/A") if (state.get("code_generation") or {}).get("files_written") else "N/A",
+                "workspace_path": state.get("workspace_path", "N/A"),
+            },
+        )
+        cov_stage.add_tool_call("coverage.py")
+
+        if rc.get("is_mock"):
+            cov_stage.complete(status=TraceStatus.INCONCLUSIVE,
+                output_summary={"reason": rc.get("reason", "Coverage not executed")})
+        else:
+            cov_stage.complete(status=TraceStatus.PASS,
+                output_summary={
+                    "line_coverage_pct": rc.get("line_coverage_pct"),
+                    "branch_coverage_pct": rc.get("branch_coverage_pct"),
+                    "num_statements": rc.get("num_statements", 0),
+                    "num_missing": rc.get("num_missing", 0),
+                    "scoped_source_files": rc.get("scoped_source_files", []),
+                })
+
+        # Add coverage provenance records
+        if not rc.get("is_mock"):
+            trace.add_provenance(
+                metric_name="Scoped Line Coverage",
+                source_tool="coverage.py JSON",
+                value=rc.get("line_coverage_pct"),
+                stage_id=cov_stage.stage_id,
+            )
+            trace.add_provenance(
+                metric_name="Scoped Branch Coverage",
+                source_tool="coverage.py JSON",
+                value=rc.get("branch_coverage_pct"),
+                stage_id=cov_stage.stage_id,
+            )
+
+    def _finalize_trace(self, trace, state):
+        """Add provenance records and save trace artifact after run completes."""
+        # ── Provenance: Requirement Traceability ──────────────────────────
+        mapping = state.get("ac_api_code_mapping", [])
+        acs = state.get("acceptance_criteria", [])
+        trace.add_provenance(
+            metric_name="Requirement Traceability",
+            source_tool="TraceabilityMapper",
+            value=f"{len(mapping)}/{len(acs)}",
+        )
+
+        # ── Provenance: User Story Unit Test Pass Rate ────────────────────
+        ut = state.get("unit_test_execution", {})
+        if ut.get("executed") and not ut.get("is_mock"):
+            trace.add_provenance(
+                metric_name="User Story Unit Test Pass Rate",
+                source_tool="pytest execution",
+                value=f"{ut.get('passed_tests', 0)}/{ut.get('total_tests', 0)}",
+            )
+
+        # ── Provenance: Real API Pass Rate ────────────────────────────────
+        exec_data = state.get("execution", {})
+        if exec_data and not exec_data.get("is_mock"):
+            trace.add_provenance(
+                metric_name="Real API Pass Rate",
+                source_tool="HttpRunner / API execution telemetry",
+                value=f"{exec_data.get('passed', 0)}/{exec_data.get('total', 0)}",
+            )
+
+        # ── Save trace to evidence_output ─────────────────────────────────
+        try:
+            out_dir = os.path.abspath(os.path.join(
+                os.path.dirname(__file__), "..", "..", "..", "evidence_output"))
+            trace_path = trace.save_to_file(out_dir)
+            trace.add_global_artifact(ArtifactRef(
+                artifact_type="execution_trace",
+                path=trace_path,
+                description="Full execution trace JSON",
+            ))
+            print(f"[ORCHESTRATOR] Execution trace saved to: {trace_path}")
+        except Exception as e:
+            print(f"[ORCHESTRATOR] Warning: could not save execution trace: {e}")

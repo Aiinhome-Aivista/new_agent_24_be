@@ -247,7 +247,19 @@ class EvidenceGeneratorAgent(BaseAgent):
                 "tests": test_cases,
             }
         else:
+            # Build accurate decision_summary based on actual results
+            _ut_total = unit_tests_payload.get("total", 0)
+            _ut_passed = unit_tests_payload.get("passed", 0)
+            _ut_failed = unit_tests_payload.get("failed", 0)
+            if _ut_total > 0 and _ut_failed > 0:
+                _decision_summary = f"{_ut_passed}/{_ut_total} automated unit tests passed; {_ut_failed} test(s) require review."
+            elif _ut_total > 0:
+                _decision_summary = f"All {_ut_total} automated unit tests passed."
+            else:
+                _decision_summary = "Unit test execution not available for this workflow."
+
             unified_payload = {
+
                 "evidence_key": evidence_key,
                 "project_name": project_name,
                 "story": story,
@@ -261,7 +273,7 @@ class EvidenceGeneratorAgent(BaseAgent):
                 "collection_name": "API Test Suite",
                 "summary_recommendation": "API Conforms to Specifications",
                 "decision_status": "Ready for Approval",
-                "decision_summary": f"All {len(test_cases)} automated unit tests passed.",
+                "decision_summary": _decision_summary,
                 "total_endpoints": len(test_cases),
                 "passed_endpoints": len(test_cases),
                 "failed_endpoints": 0,
@@ -321,6 +333,22 @@ class EvidenceGeneratorAgent(BaseAgent):
             "docx_path": docx_path,
             "html_path": html_path,
             "checksum": checksum,
+            "trace_data": {
+                "docx_path": docx_path,
+                "html_path": html_path,
+                "evidence_sections": [
+                    "Audit & Environment Telemetry",
+                    "Requirement Traceability Matrix",
+                    "Unit Test Suite & Code Coverage Verification",
+                    "API Verification & Execution Telemetry",
+                    "Implementation Gaps & Deviations",
+                    "Human Review & Signoff Status",
+                    "Execution Trace & Provenance",
+                ],
+                "snapshot_count": len(unified_payload.get("results", [])),
+                "sha256": checksum,
+                "generation_status": "SUCCESS" if os.path.isfile(docx_path) else "PARTIAL",
+            },
         }
         state["autonomous_evidence"] = unified_payload
         state["current_stage"] = ALM_APPROVAL  # human checkpoint
