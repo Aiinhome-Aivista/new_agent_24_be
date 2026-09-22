@@ -6,6 +6,7 @@ and tamper-evident cryptographic SHA-256 seals.
 import os
 import re
 import json
+import hashlib
 import docx
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
