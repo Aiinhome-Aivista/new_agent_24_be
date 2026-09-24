@@ -383,14 +383,15 @@ class PytestCoverageExecutor:
             result.is_mock = True
             return result
 
-        # Validate pytest-cov is available
+        # Validate pytest and pytest-cov are available
         try:
-            subprocess.run(
-                [self.python_exe, "-m", "pytest", "--version"],
-                capture_output=True, timeout=30
-            )
+            import importlib.util
+            if not importlib.util.find_spec("pytest") or not importlib.util.find_spec("pytest_cov"):
+                result.error_message = "pytest or pytest-cov is not installed in the Python environment."
+                result.is_mock = True
+                return result
         except Exception as e:
-            result.error_message = f"pytest not available: {e}"
+            result.error_message = f"pytest environment check failed: {e}"
             result.is_mock = True
             return result
 
@@ -478,7 +479,9 @@ class PytestCoverageExecutor:
                 f"--cov-report=json:{coverage_json_path}",
                 "--cov-report=term-missing",
                 "-o", f"cache_dir={pytest_cache_dir}",
+                "-o", "addopts=",
                 "-p", "no:cacheprovider",
+                "-p", "no:langsmith",
             ])
 
             # Set up subprocess environment:
@@ -486,6 +489,9 @@ class PytestCoverageExecutor:
             # 2. Exclude any Agent-24 backend directories so target app module is not shadowed!
             # 3. Direct COVERAGE_FILE inside tmp_dir in Agent-24 so target codebase is NEVER polluted!
             env = os.environ.copy()
+            env["LANGSMITH_TRACING"] = "false"
+            env["LANGCHAIN_TRACING_V2"] = "false"
+            env["PYTHONDONTWRITEBYTECODE"] = "1"
             clean_paths = [source_dir]
             for p in env.get("PYTHONPATH", "").split(os.pathsep):
                 p_norm = os.path.normpath(p).lower()
