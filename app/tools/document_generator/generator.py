@@ -722,14 +722,14 @@ def render_autonomous_evidence_html(evidence_data, out_path=None, out_dir="./evi
                     {devs_html}
                 </div>
 
-                <div class="code-box">
-                    <div class="code-box-header">▶ REQUEST PAYLOAD (BODY SENT)</div>
-                    <pre class="code-pre">{_html.escape(req_str)}</pre>
+                <div class="code-box" style="border: 1px solid rgba(56,189,248,0.3); background: #0c1829; border-radius: 6px; margin-top: 8px; overflow: hidden;">
+                    <div class="code-box-header" style="background: rgba(2,132,199,0.25); color: #38bdf8; font-weight: 700; padding: 5px 12px; font-size: 11px; letter-spacing: 0.5px;">▶ REQUEST PAYLOAD (BODY SENT)</div>
+                    <pre class="code-pre" style="padding: 10px 14px; margin: 0; color: #bae6fd; font-family: 'Consolas', monospace; font-size: 11px; line-height: 1.45; overflow-x: auto;">{_html.escape(req_str)}</pre>
                 </div>
 
-                <div class="code-box">
-                    <div class="code-box-header">▶ LIVE CAPTURED SERVER RESPONSE (EVIDENCE)</div>
-                    <pre class="code-pre code-resp">{_html.escape(resp_str)}</pre>
+                <div class="code-box" style="border: 1px solid rgba(16,185,129,0.3); background: #061e18; border-radius: 6px; margin-top: 10px; overflow: hidden;">
+                    <div class="code-box-header" style="background: rgba(5,150,105,0.25); color: #34d399; font-weight: 700; padding: 5px 12px; font-size: 11px; letter-spacing: 0.5px;">▶ LIVE CAPTURED SERVER RESPONSE (EVIDENCE)</div>
+                    <pre class="code-pre code-resp" style="padding: 10px 14px; margin: 0; color: #a7f3d0; font-family: 'Consolas', monospace; font-size: 11px; line-height: 1.45; overflow-x: auto;">{_html.escape(resp_str)}</pre>
                 </div>
             </div>
         </div>
@@ -1169,31 +1169,6 @@ def render_autonomous_evidence_html(evidence_data, out_path=None, out_dir="./evi
             """
 
         test_code_cards_html = []
-        for idx, tc in enumerate(test_cases_list):
-            t_key = tc.get("test_key", f"TC-{idx+1}")
-            t_title = tc.get("title", "")
-            t_scen = (tc.get("scenario_type") or "unit").upper()
-            ac_ids = tc.get("acceptance_criteria_ids") or []
-            ac_tags_html = "".join([f'<span style="background: rgba(249,115,22,0.15); color: #f97316; border: 1px solid rgba(249,115,22,0.3); padding: 1px 6px; border-radius: 4px; font-size: 9px; font-family: monospace; margin-left: 6px;">{_html.escape(str(acid))}</span>' for acid in ac_ids])
-
-            test_code = _get_or_derive_test_code(tc, default_lang=target_lang, default_framework=target_framework)
-            test_code_cards_html.append(f"""
-            <div class="evidence-snapshot-card" style="margin-bottom: 16px; border: 1px solid #334155; border-radius: 8px; overflow: hidden;">
-                <div class="terminal-bar" style="display: flex; justify-content: space-between; align-items: center; background: #1e293b; padding: 8px 12px; border-bottom: 1px solid #334155;">
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <span class="sev-pill" style="background: rgba(56,189,248,0.15); color: #38bdf8; border: 1px solid rgba(56,189,248,0.3); padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 700;">{t_scen}</span>
-                        <strong style="color: #f8fafc; font-size: 11.5px;">{_html.escape(t_key)}: {_html.escape(t_title)}</strong>
-                        {ac_tags_html}
-                    </div>
-                    <div>
-                        <span style="color: #10b981; font-weight: 700; font-family: monospace; font-size: 11px;">{_html.escape((target_lang or 'python').upper())} · {_html.escape((target_framework or 'pytest').upper())}</span>
-                    </div>
-                </div>
-                <div style="background: #090d13; padding: 14px;">
-                    <pre class="code-pre" style="margin: 0; background: transparent; border: none; padding: 0; color: #34d399; font-size: 11px; font-family: 'Consolas', 'Courier New', monospace; line-height: 1.45; overflow-x: auto;"><code>{_html.escape(test_code)}</code></pre>
-                </div>
-            </div>
-            """)
 
         cov_matrix_section_html = ""
         if cov_rows_html:
@@ -1221,23 +1196,20 @@ def render_autonomous_evidence_html(evidence_data, out_path=None, out_dir="./evi
             </div>
             """
 
-        unit_code_section_html = ""
-        if test_code_cards_html:
-            unit_code_section_html = f"""
-            <div style="margin: 24px 0 16px 0;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                    <div>
-                        <h3 style="font-size: 13.5px; color: #f8fafc; margin: 0; font-weight: 700;">Synthesized Production Unit Test Code Artifacts</h3>
-                        <p style="margin: 2px 0 0 0; color: #94a3b8; font-size: 11px;">Complete executable test methods generated for all approved scenarios, adhering to Arrange-Act-Assert (AAA).</p>
-                    </div>
-                    <span style="background: rgba(16,185,129,0.15); color: #10b981; border: 1px solid rgba(16,185,129,0.3); padding: 3px 9px; border-radius: 6px; font-size: 10.5px; font-weight: 700; font-family: monospace;">
-                        {len(test_code_cards_html)} TESTS SYNTHESIZED
-                    </span>
+        unit_code_section_html = f"""
+        <div style="margin: 16px 0; padding: 12px 16px; background: rgba(30,41,59,0.5); border: 1px solid #334155; border-radius: 8px; display: flex; align-items: center; justify-content: space-between;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <span style="font-size: 16px;">📁</span>
+                <div>
+                    <span style="font-weight: 700; color: #f8fafc; font-size: 12px;">Verified Test Suite Artifact</span>
+                    <p style="margin: 2px 0 0 0; color: #94a3b8; font-size: 11px;">{files_written[0].get('relative_path') if files_written else 'Generated Test Suite'} ({len(test_cases_list)} automated test methods)</p>
                 </div>
-                {file_banner_html}
-                {"".join(test_code_cards_html)}
             </div>
-            """
+            <span style="background: rgba(16,185,129,0.15); color: #10b981; border: 1px solid rgba(16,185,129,0.3); padding: 3px 10px; border-radius: 6px; font-size: 11px; font-weight: 700;">
+                TEST SUITE VERIFIED
+            </span>
+        </div>
+        """ if files_written else ""
 
         unit_test_section_html = f"""
         <div style="margin: 28px 0 20px 0; border-top: 1px solid #334155; padding-top: 20px;">

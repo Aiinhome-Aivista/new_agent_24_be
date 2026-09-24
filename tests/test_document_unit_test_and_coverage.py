@@ -82,7 +82,24 @@ def test_docx_and_html_contain_unit_test_code_and_ac_coverage(tmp_path):
             "passed": 2,
             "failed": 0,
         },
-        "results": [],
+        "results": [
+            {
+                "method": "POST",
+                "endpoint": "/api/tickets",
+                "url": "http://localhost:5001/api/tickets",
+                "status_code": 201,
+                "passed": True,
+                "duration_ms": 14,
+                "ac_key": "AC-01",
+                "test_case_id": "TC-SBP101-001",
+                "request_payload": {"title": "Test Ticket", "priority": "high"},
+                "response_payload": {"id": "t-101", "title": "Test Ticket", "priority": "high", "status": "OPEN"},
+                "assertions": [
+                    {"name": "Status code is 201", "passed": True},
+                    {"name": "Status is OPEN", "passed": True}
+                ]
+            }
+        ],
         "deviations": [],
     }
 
@@ -100,12 +117,20 @@ def test_docx_and_html_contain_unit_test_code_and_ac_coverage(tmp_path):
     assert "AC-02" in full_text
     assert "YES [Covered]" in full_text
 
-    # Assert Synthesized Unit Test Code is present in DOCX
-    assert "Synthesized Production Unit Test Code" in full_text
-    assert "def test_create_ticket_valid(client):" in full_text
-    assert "def test_create_ticket_missing_title(client):" in full_text
-    assert "assert response.status_code == 201" in full_text
-    assert "assert response.status_code == 400" in full_text
+    # Assert Synthesized Unit Test Raw Code is removed per client requirement
+    assert "Synthesized Production Unit Test Code" not in full_text
+    assert "def test_create_ticket_valid(client):" not in full_text
+    assert "def test_create_ticket_missing_title(client):" not in full_text
+
+    # Assert Test Suite Artifact Reference is present
+    assert "Verified Test Suite Artifact" in full_text
+    assert "tests/test_tickets.py" in full_text
+
+    # Assert API Testing Screenshots & Highlighted Payloads are present in DOCX
+    assert "POSTMAN API EVIDENCE SNAPSHOT" in full_text
+    assert "REQUEST PAYLOAD" in full_text
+    assert "LIVE CAPTURED RESPONSE" in full_text
+    assert "Test Ticket" in full_text
 
     # 2. Test HTML report generation
     html_path = render_autonomous_evidence_html(evidence_data, out_dir=out_dir)
@@ -121,8 +146,14 @@ def test_docx_and_html_contain_unit_test_code_and_ac_coverage(tmp_path):
     assert "AC-02" in html_content
     assert "YES [Covered]" in html_content
 
-    # Assert Synthesized Unit Test Code is present in HTML
-    assert "Synthesized Production Unit Test Code Artifacts" in html_content
-    assert "def test_create_ticket_valid(client):" in html_content
-    assert "def test_create_ticket_missing_title(client):" in html_content
-    assert "assert response.status_code == 201" in html_content
+    # Assert Synthesized Unit Test Raw Code is removed from HTML per client requirement
+    assert "Synthesized Production Unit Test Code Artifacts" not in html_content
+    assert "def test_create_ticket_valid(client):" not in html_content
+
+    # Assert Test Suite Artifact Reference is present in HTML
+    assert "Verified Test Suite Artifact" in html_content
+
+    # Assert API Testing Snapshots & Payloads are present in HTML
+    assert "POSTMAN API EVIDENCE SNAPSHOT" in html_content
+    assert "REQUEST PAYLOAD (BODY SENT)" in html_content
+    assert "LIVE CAPTURED SERVER RESPONSE" in html_content

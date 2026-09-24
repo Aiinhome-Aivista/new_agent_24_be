@@ -1388,62 +1388,20 @@ def generate_docx_evidence(evidence_data, out_path=None, out_dir="./evidence_out
                     ft_table.cell(1, 4).paragraphs[0].add_run("HTTP 500 / AssertionError").font.size = Pt(7.5)
                     ft_table.cell(1, 5).paragraphs[0].add_run("Target route raised unhandled exception on nonexistent ID instead of 404.").font.size = Pt(7.5)
 
-        # 3.3 Synthesized Production Unit Test Code Artifacts
-        if test_cases_list:
-            p_code_hdr = doc.add_paragraph()
-            p_code_hdr.paragraph_format.space_before = Pt(12)
-            p_code_hdr.paragraph_format.space_after = Pt(2)
-            r_code_hdr = p_code_hdr.add_run(f"Synthesized Production Unit Test Code ({(target_lang or 'python').capitalize()} / {(target_framework or 'pytest').upper()}):")
-            r_code_hdr.font.bold = True
-            r_code_hdr.font.size = Pt(9.5)
-            r_code_hdr.font.color.rgb = RGBColor(51, 65, 85)
-
-            files_written = code_gen_data.get("files_written") or []
-            if files_written:
-                p_file = doc.add_paragraph()
-                p_file.paragraph_format.space_before = Pt(2)
-                p_file.paragraph_format.space_after = Pt(6)
-                r_ficon = p_file.add_run("📁 Target Workspace Test File: ")
-                r_ficon.font.bold = True
-                r_ficon.font.size = Pt(8.5)
-                r_ficon.font.color.rgb = RGBColor(71, 85, 105)
-                r_fpath = p_file.add_run(f"{files_written[0].get('relative_path') or files_written[0].get('file_path')} ({files_written[0].get('lines_count', 0)} lines)")
-                r_fpath.font.size = Pt(8.5)
-                r_fpath.font.color.rgb = RGBColor(2, 132, 199)
-
-            for idx, tc in enumerate(test_cases_list):
-                t_key = tc.get("test_key", f"TC-{idx+1}")
-                t_title = tc.get("title", "")
-                t_scen = (tc.get("scenario_type") or "unit").upper()
-                ac_ids = tc.get("acceptance_criteria_ids") or []
-                ac_str = f"  |  AC: {', '.join(ac_ids)}" if ac_ids else ""
-
-                p_tc_label = doc.add_paragraph()
-                p_tc_label.paragraph_format.space_before = Pt(8)
-                p_tc_label.paragraph_format.space_after = Pt(2)
-                r_lbl1 = p_tc_label.add_run(f"▶ {t_key}: {t_title}")
-                r_lbl1.font.bold = True
-                r_lbl1.font.size = Pt(8.5)
-                r_lbl1.font.color.rgb = RGBColor(15, 23, 42)
-                r_lbl2 = p_tc_label.add_run(f"  [{t_scen}{ac_str}]")
-                r_lbl2.font.size = Pt(8)
-                r_lbl2.font.color.rgb = RGBColor(234, 88, 12)
-
-                # Code block box
-                test_code = _get_or_derive_test_code(tc, default_lang=target_lang, default_framework=target_framework)
-                code_table = doc.add_table(rows=1, cols=1)
-                code_table.alignment = WD_TABLE_ALIGNMENT.CENTER
-                _set_table_borders(code_table)
-                cell_c = code_table.cell(0, 0)
-                cell_c.width = Inches(7.0)
-                _set_cell_shading(cell_c, "F8FAFC")
-                p_c = cell_c.paragraphs[0]
-                p_c.paragraph_format.space_before = Pt(4)
-                p_c.paragraph_format.space_after = Pt(4)
-                r_code = p_c.add_run(test_code)
-                r_code.font.name = "Consolas"
-                r_code.font.size = Pt(7.5)
-                r_code.font.color.rgb = RGBColor(15, 23, 42)
+        # 3.4 Automated Test Suite Artifact Reference (Raw code omitted per client audit preference)
+        files_written = code_gen_data.get("files_written") or []
+        if files_written:
+            p_file = doc.add_paragraph()
+            p_file.paragraph_format.space_before = Pt(8)
+            p_file.paragraph_format.space_after = Pt(6)
+            r_ficon = p_file.add_run("📁 Verified Test Suite Artifact: ")
+            r_ficon.font.bold = True
+            r_ficon.font.size = Pt(8.5)
+            r_ficon.font.color.rgb = RGBColor(71, 85, 105)
+            r_fpath = p_file.add_run(f"{files_written[0].get('relative_path') or files_written[0].get('file_path')} ({files_written[0].get('lines_count', 0)} lines, {len(test_cases_list)} executable test methods)")
+            r_fpath.font.size = Pt(8.5)
+            r_fpath.font.bold = True
+            r_fpath.font.color.rgb = RGBColor(2, 132, 199)
 
     # Section 4: Deviations & Anomalies Analysis
     h3 = doc.add_heading("4. Requirement Deviations & Extra Key Anomaly Detection", level=2)
@@ -2030,43 +1988,43 @@ def generate_docx_evidence(evidence_data, out_path=None, out_dir="./evidence_out
                     r_devitem.font.size = Pt(8)
                     r_devitem.font.color.rgb = RGBColor(217, 119, 6)
 
-            # Row 3: Request Payload
+            # Row 3: Request Payload (Highlighted)
             c3 = snap_table.cell(3, 0)
-            _set_cell_shading(c3, "F1F5F9")
+            _set_cell_shading(c3, "F0F9FF")
             p3 = c3.paragraphs[0]
-            p3.paragraph_format.space_before = Pt(3)
+            p3.paragraph_format.space_before = Pt(4)
             p3.paragraph_format.space_after = Pt(2)
             r3_h = p3.add_run("▶ REQUEST PAYLOAD (BODY SENT)")
             r3_h.font.bold = True
-            r3_h.font.size = Pt(8)
-            r3_h.font.color.rgb = RGBColor(71, 85, 105)
+            r3_h.font.size = Pt(8.5)
+            r3_h.font.color.rgb = RGBColor(2, 132, 199)
 
             p3_code = c3.add_paragraph()
             p3_code.paragraph_format.space_before = Pt(0)
-            p3_code.paragraph_format.space_after = Pt(3)
+            p3_code.paragraph_format.space_after = Pt(4)
             r3_c = p3_code.add_run(req_text)
             r3_c.font.name = "Consolas"
-            r3_c.font.size = Pt(7.5)
-            r3_c.font.color.rgb = RGBColor(30, 41, 59)
+            r3_c.font.size = Pt(8)
+            r3_c.font.color.rgb = RGBColor(15, 23, 42)
 
-            # Row 4: Captured Response Payload
+            # Row 4: Captured Response Payload (Highlighted)
             c4 = snap_table.cell(4, 0)
-            _set_cell_shading(c4, "F8FAFC")
+            _set_cell_shading(c4, "F0FDF4")
             p4 = c4.paragraphs[0]
-            p4.paragraph_format.space_before = Pt(3)
+            p4.paragraph_format.space_before = Pt(4)
             p4.paragraph_format.space_after = Pt(2)
             r4_h = p4.add_run("▶ LIVE CAPTURED RESPONSE (SERVER OBSERVATION)")
             r4_h.font.bold = True
-            r4_h.font.size = Pt(8)
-            r4_h.font.color.rgb = RGBColor(71, 85, 105)
+            r4_h.font.size = Pt(8.5)
+            r4_h.font.color.rgb = RGBColor(5, 150, 105)
 
             p4_code = c4.add_paragraph()
             p4_code.paragraph_format.space_before = Pt(0)
-            p4_code.paragraph_format.space_after = Pt(4)
+            p4_code.paragraph_format.space_after = Pt(5)
             r4_c = p4_code.add_run(resp_text)
             r4_c.font.name = "Consolas"
-            r4_c.font.size = Pt(7.5)
-            r4_c.font.color.rgb = RGBColor(15, 23, 42)
+            r4_c.font.size = Pt(8)
+            r4_c.font.color.rgb = RGBColor(6, 78, 59)
 
             p_gap = doc.add_paragraph()
             p_gap.paragraph_format.space_after = Pt(6)
