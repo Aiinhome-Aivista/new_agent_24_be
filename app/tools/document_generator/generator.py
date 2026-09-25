@@ -6,7 +6,7 @@ Markdown/HTML artifact by default (dependency-free); DOCX/PDF adapters can be ad
 import os
 import hashlib
 from datetime import datetime, timezone
-from app.tools.document_generator.docx_generator import _get_or_derive_test_code, _get_or_derive_coverage_matrix
+from app.tools.document_generator.docx_generator import _get_or_derive_test_code, _get_or_derive_coverage_matrix, _normalize_ac_key, _ac_matches
 
 
 def render_evidence(evidence_key, story, test_cases, execution, code_quality, narrative="", out_dir="./evidence_output"):
@@ -403,20 +403,20 @@ def render_autonomous_evidence_html(evidence_data, out_path=None, out_dir="./evi
             k = item.get("ac_key", "AC-01")
             req = item.get("requirement") or item.get("full_text") or ""
             t_keys = item.get("test_case_keys") or []
-            k_clean = str(k).upper().strip()
             matched_tcs = [
                 t for t in test_cases_list
                 if t.get("test_key") in t_keys
-                or k_clean in [str(x).upper().strip() for x in (t.get("acceptance_criteria_ids") or [])]
+                or any(_ac_matches(k, x) for x in (t.get("acceptance_criteria_ids") or []))
+                or _ac_matches(k, t.get("title"))
+                or _ac_matches(k, t.get("test_key"))
             ]
             matched_res = [
                 r for r in results
-                if k_clean in str(r.get("test_key") or "").upper()
-                or any(k_clean == str(a).upper().strip() for a in r.get("ac_keys", []))
-                or k_clean == str(r.get("ac_key") or "").upper().strip()
-                or k_clean == str(r.get("ac_id") or "").upper().strip()
-                or str(r.get("ac_key") or "").upper().strip() in k_clean
-                or k_clean in str(r.get("ac_key") or "").upper().strip()
+                if _ac_matches(k, r.get("ac_key"))
+                or _ac_matches(k, r.get("ac_id"))
+                or any(_ac_matches(k, a) for a in r.get("ac_keys", []))
+                or _ac_matches(k, r.get("test_key"))
+                or _ac_matches(k, r.get("title"))
             ]
 
             api_str = "N/A"
@@ -748,16 +748,14 @@ def render_autonomous_evidence_html(evidence_data, out_path=None, out_dir="./evi
     # Section 3.1: AC → API → Code Traceability Matrix (Prompt Section 6)
     for idx, ac_row in enumerate(ac_mapping):
         ac_key = ac_row.get("ac_key", f"AC-{idx+1}")
-        k_clean = str(ac_key).upper().strip()
 
         matched_res = [
             r for r in results
-            if k_clean in str(r.get("test_key") or "").upper()
-            or any(k_clean == str(a).upper().strip() for a in r.get("ac_keys", []))
-            or k_clean == str(r.get("ac_key") or "").upper().strip()
-            or k_clean == str(r.get("ac_id") or "").upper().strip()
-            or str(r.get("ac_key") or "").upper().strip() in k_clean
-            or k_clean in str(r.get("ac_key") or "").upper().strip()
+            if _ac_matches(ac_key, r.get("ac_key"))
+            or _ac_matches(ac_key, r.get("ac_id"))
+            or any(_ac_matches(ac_key, a) for a in r.get("ac_keys", []))
+            or _ac_matches(ac_key, r.get("test_key"))
+            or _ac_matches(ac_key, r.get("title"))
         ]
 
         apis = ac_row.get("mapped_apis") or []
@@ -1130,17 +1128,17 @@ def render_autonomous_evidence_html(evidence_data, out_path=None, out_dir="./evi
         # Failed User-Story Test Analysis per Prompt Section 10
         failed_tests_html = ""
         failed_tests = [tc for tc in test_cases_list if str(tc.get("status", "")).upper() in ("FAILED", "FAIL")]
-        if ut_failed > 0 or failed_tests:
+        if ut_failed > 0 and failed_tests:
             ft_rows = "".join([
                 f"""<tr>
-                    <td style="padding: 6px 8px; border-bottom: 1px solid #334155; font-family: monospace; color: #ef4444; font-weight: 700;">{_html.escape(str(ftc.get('test_key', 'TC-09')))}</td>
-                    <td style="padding: 6px 8px; border-bottom: 1px solid #334155; color: #cbd5e1;">{_html.escape(', '.join(ftc.get('acceptance_criteria_ids', ['AC-08'])))}</td>
-                    <td style="padding: 6px 8px; border-bottom: 1px solid #334155; color: #f8fafc; font-weight: 600;">{_html.escape(str(ftc.get('title', 'test_ticket_update_nonexistent')))}</td>
-                    <td style="padding: 6px 8px; border-bottom: 1px solid #334155; color: #cbd5e1;">{_html.escape(str(ftc.get('expected', 'HTTP 404 Not Found')))}</td>
-                    <td style="padding: 6px 8px; border-bottom: 1px solid #334155; color: #fca5a5;">{_html.escape(str(ftc.get('actual', 'HTTP 500 / AssertionError')))}</td>
-                    <td style="padding: 6px 8px; border-bottom: 1px solid #334155; color: #f87171; font-size: 11px;">{_html.escape(str(ftc.get('error_message', 'Target route raised unhandled exception on nonexistent ID.')))}</td>
+                    <td style="padding: 6px 8px; border-bottom: 1px solid #334155; font-family: monospace; color: #ef4444; font-weight: 700;">{_html.escape(str(ftc.get('test_key', f'TC-{fi+1}')))}</td>
+                    <td style="padding: 6px 8px; border-bottom: 1px solid #334155; color: #cbd5e1;">{_html.escape(', '.join(ftc.get('acceptance_criteria_ids', [])))}</td>
+                    <td style="padding: 6px 8px; border-bottom: 1px solid #334155; color: #f8fafc; font-weight: 600;">{_html.escape(str(ftc.get('title', '')))}</td>
+                    <td style="padding: 6px 8px; border-bottom: 1px solid #334155; color: #cbd5e1;">{_html.escape(str(ftc.get('expected', '')))}</td>
+                    <td style="padding: 6px 8px; border-bottom: 1px solid #334155; color: #fca5a5;">{_html.escape(str(ftc.get('actual', '')))}</td>
+                    <td style="padding: 6px 8px; border-bottom: 1px solid #334155; color: #f87171; font-size: 11px;">{_html.escape(str(ftc.get('error_message', 'Assertion failure')))}</td>
                 </tr>"""
-                for ftc in (failed_tests or [{"test_key": "TC-09", "acceptance_criteria_ids": ["AC-08"], "title": "test_ticket_update_nonexistent", "expected": "HTTP 404 Not Found", "actual": "HTTP 500 / AssertionError", "error_message": "Target route raised unhandled exception on nonexistent ID instead of 404."}])
+                for fi, ftc in enumerate(failed_tests)
             ])
             failed_tests_html = f"""
             <div style="background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.3); border-radius: 8px; padding: 12px 16px; margin: 12px 0 16px 0;">

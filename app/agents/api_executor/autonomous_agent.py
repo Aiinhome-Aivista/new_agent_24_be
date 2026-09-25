@@ -368,35 +368,43 @@ Generate all {len(acceptance_criteria)} executable test scenarios in valid JSON 
         scenarios = []
         for idx, ac in enumerate(acceptance_criteria):
             ac_key = ac.get("ac_key") if isinstance(ac, dict) else f"AC-{idx+1:02d}"
-            text = ac.get("text", "") if isinstance(ac, dict) else str(ac)
+            text = (ac.get("text") or ac.get("description") or ac.get("full_text") or ac.get("content") or "") if isinstance(ac, dict) else str(ac)
             t_low = text.lower()
 
             # Dynamic Method Extraction
-            method = "POST"
-            if any(k in t_low for k in ("get", "retrieve", "query", "fetch", "find", "search", "read")):
-                method = "GET"
+            method_match = re.search(r'\b(GET|POST|PUT|PATCH|DELETE)\b\s+(?:request|endpoint|call)', text, re.I)
+            if method_match:
+                method = method_match.group(1).upper()
             elif "delete" in t_low or "remove" in t_low:
                 method = "DELETE"
             elif "put" in t_low or "replace" in t_low:
                 method = "PUT"
-            elif "patch" in t_low or "update" in t_low:
+            elif "patch" in t_low:
                 method = "PATCH"
+            elif any(k in t_low for k in ("get", "retrieve", "query", "fetch", "find", "search", "read")):
+                method = "GET"
             elif default_post:
                 method = default_post.get("method", "POST")
+            else:
+                method = "POST"
 
             # Dynamic Status Code Extraction
-            status_match = re.search(r'(?:HTTP\s+status\s+|\bHTTP\s+|\bstatus\s+code\s+|\bstatus\s+)`?(\d{3})\b', text, re.I)
+            status_match = re.search(
+                r'(?:HTTP\s+status(?:\s+code)?(?:\s+is)?\s+|\bHTTP\s+|\bstatus(?:\s+code)?(?:\s+is)?\s+|\breturns(?:\s+HTTP)?\s+)`?(\d{3})\b|`?(\d{3})\s+(?:OK|Created|Accepted|Bad Request|Unauthorized|Forbidden|Not Found|Conflict|Unprocessable|Internal Server Error)\b',
+                text,
+                re.I
+            )
             if status_match:
-                expected_status = int(status_match.group(1))
+                expected_status = int(status_match.group(1) or status_match.group(2))
             else:
-                if any(w in t_low for w in ("bad request", "reject", "invalid", "missing", "fails", "error", "prohibit")):
-                    expected_status = 400
-                elif any(w in t_low for w in ("not found", "non-existent", "missing id", "does not exist")):
+                if any(w in t_low for w in ("not found", "non-existent", "missing id", "does not exist")):
                     expected_status = 404
                 elif any(w in t_low for w in ("unauthorized", "unauthenticated", "invalid token")):
                     expected_status = 401
                 elif any(w in t_low for w in ("forbidden", "permission denied")):
                     expected_status = 403
+                elif any(w in t_low for w in ("bad request", "reject", "invalid", "missing", "fails", "error", "prohibit")):
+                    expected_status = 400
                 elif method == "POST":
                     expected_status = 201
                 else:
@@ -405,7 +413,7 @@ Generate all {len(acceptance_criteria)} executable test scenarios in valid JSON 
             # Dynamic Path Resolution
             path_match = re.search(r'`?(/api/[^\s`,"\'\)]+)`?', text)
             if path_match:
-                path = path_match.group(1).rstrip('`,"\'')
+                path = path_match.group(1).rstrip('`,"\'.,:;)')
             elif method == "GET" and default_get.get("path"):
                 path = default_get.get("path")
             elif default_post.get("path"):
@@ -415,10 +423,10 @@ Generate all {len(acceptance_criteria)} executable test scenarios in valid JSON 
 
             # Resolve template path parameters like {id}, :id, <id>, {ticket_id}
             if re.search(r'\{[a-zA-Z0-9_\-]+\}|<[a-zA-Z0-9_\-]+>|:[a-zA-Z0-9_\-]+', path):
-                if expected_status == 404 or any(w in t_low for w in ("not found", "non-existent", "does not exist")):
+                if expected_status == 404:
                     path = re.sub(r'\{[a-zA-Z0-9_\-]+\}|<[a-zA-Z0-9_\-]+>|:[a-zA-Z0-9_\-]+', '9999', path)
                 else:
-                    target_id = "101"
+                    target_id = "1"
                     if default_get.get("path") and re.search(r'/(\d+)', default_get["path"]):
                         target_id = re.search(r'/(\d+)', default_get["path"]).group(1)
                     path = re.sub(r'\{[a-zA-Z0-9_\-]+\}|<[a-zA-Z0-9_\-]+>|:[a-zA-Z0-9_\-]+', str(target_id), path)
@@ -441,14 +449,33 @@ Generate all {len(acceptance_criteria)} executable test scenarios in valid JSON 
                 expected_err = "JSON"
 
             # C. Non-existent Entity / 404 Path Mutation
-            elif expected_status == 404 or any(w in t_low for w in ("non-existent", "not found", "does not exist")):
+            elif expected_status == 404:
                 path = re.sub(r'/\d+$', '/9999', path)
                 if not re.search(r'/\d+$', path) and not path.endswith('/9999'):
                     path = f"{path.rstrip('/')}/9999"
                 sc_payload = None
                 expected_err = "not found"
 
-            # D. Invalid Field Value Mutation (Enum / Type - Negative Tests Only)
+            # D. Numeric / Price / Stock Boundary Mutation (Negative Tests Only)
+            elif expected_status == 400 and any(w in t_low for w in ("price", "amount", "cost", "quantity", "stock", "count", "numeric", "negative", "less than", "zero", "<=")) and isinstance(sc_payload, dict):
+                mutated = False
+                for num_field in ["price", "amount", "cost", "stock", "quantity", "count"]:
+                    if num_field in sc_payload and (num_field in t_low or "numeric" in t_low or "zero" in t_low or "negative" in t_low or "price" in t_low):
+                        if "0" in t_low or "zero" in t_low:
+                            sc_payload[num_field] = 0
+                        else:
+                            sc_payload[num_field] = -10.50
+                        mutated = True
+                        break
+                if not mutated:
+                    for k, v in sc_payload.items():
+                        if isinstance(v, (int, float)):
+                            sc_payload[k] = -10
+                            mutated = True
+                            break
+                expected_err = "greater than 0" if "price" in t_low else "positive"
+
+            # E. Invalid Field Value Mutation (Enum / Type - Negative Tests Only)
             elif expected_status == 400 and any(w in t_low for w in ("invalid", "unrecognized", "unsupported", "unknown", "disallowed", "illegal")) and isinstance(sc_payload, dict):
                 mutated = False
                 # Prioritize specific known schema fields mentioned in AC

@@ -39,6 +39,32 @@ def _set_table_borders(table):
     tblPr.append(borders)
 
 
+def _normalize_ac_key(key):
+    """Normalizes 'AC-01', 'AC_1', 'ac-1', 'AC1' into canonical 'AC-1'."""
+    if not key:
+        return ""
+    s = str(key).upper().strip()
+    m = re.search(r"AC[-_]?0*(\d+)", s)
+    if m:
+        return f"AC-{m.group(1)}"
+    return s
+
+
+def _ac_matches(ac_a, ac_b):
+    """Checks if two AC identifiers represent the same criterion, robust to zero padding."""
+    if not ac_a or not ac_b:
+        return False
+    norm_a = _normalize_ac_key(ac_a)
+    norm_b = _normalize_ac_key(ac_b)
+    if norm_a and norm_b and norm_a == norm_b:
+        return True
+    if norm_a and norm_a in str(ac_b).upper():
+        return True
+    if norm_b and norm_b in str(ac_a).upper():
+        return True
+    return False
+
+
 def _get_or_derive_test_code(tc, default_lang="python", default_framework="pytest"):
     """Returns actual synthesized unit test code or derives deterministic executable test method."""
     if tc.get("generated_code") and tc.get("generated_code").strip():
@@ -713,16 +739,17 @@ def generate_docx_evidence(evidence_data, out_path=None, out_dir="./evidence_out
             matched_tcs = [
                 t for t in test_cases_list
                 if t.get("test_key") in t_keys
-                or k_clean in [str(x).upper().strip() for x in (t.get("acceptance_criteria_ids") or [])]
+                or any(_ac_matches(k, x) for x in (t.get("acceptance_criteria_ids") or []))
+                or _ac_matches(k, t.get("title"))
+                or _ac_matches(k, t.get("test_key"))
             ]
             matched_res = [
                 r for r in results
-                if k_clean in str(r.get("test_key") or "").upper()
-                or any(k_clean == str(a).upper().strip() for a in r.get("ac_keys", []))
-                or k_clean == str(r.get("ac_key") or "").upper().strip()
-                or k_clean == str(r.get("ac_id") or "").upper().strip()
-                or str(r.get("ac_key") or "").upper().strip() in k_clean
-                or k_clean in str(r.get("ac_key") or "").upper().strip()
+                if _ac_matches(k, r.get("ac_key"))
+                or _ac_matches(k, r.get("ac_id"))
+                or any(_ac_matches(k, a) for a in r.get("ac_keys", []))
+                or _ac_matches(k, r.get("test_key"))
+                or _ac_matches(k, r.get("title"))
             ]
 
             api_str = "N/A"
@@ -802,17 +829,15 @@ def generate_docx_evidence(evidence_data, out_path=None, out_dir="./evidence_out
         for idx, rec in enumerate(ac_mapping):
             row_idx = idx + 1
             ac_key = rec.get("ac_key", f"AC-{idx+1}")
-            k_clean = str(ac_key).upper().strip()
 
             # Find matching executed results
             matched_res = [
                 r for r in results
-                if k_clean in str(r.get("test_key") or "").upper()
-                or any(k_clean == str(a).upper().strip() for a in r.get("ac_keys", []))
-                or k_clean == str(r.get("ac_key") or "").upper().strip()
-                or k_clean == str(r.get("ac_id") or "").upper().strip()
-                or str(r.get("ac_key") or "").upper().strip() in k_clean
-                or k_clean in str(r.get("ac_key") or "").upper().strip()
+                if _ac_matches(ac_key, r.get("ac_key"))
+                or _ac_matches(ac_key, r.get("ac_id"))
+                or any(_ac_matches(ac_key, a) for a in r.get("ac_keys", []))
+                or _ac_matches(ac_key, r.get("test_key"))
+                or _ac_matches(ac_key, r.get("title"))
             ]
 
             apis = rec.get("mapped_apis") or []
@@ -1356,22 +1381,22 @@ def generate_docx_evidence(evidence_data, out_path=None, out_dir="./evidence_out
                 r_fts.font.size = Pt(8.5)
                 r_fts.font.color.rgb = RGBColor(51, 65, 85)
 
-                ft_table = doc.add_table(rows=len(failed_tests) + 1 if failed_tests else 2, cols=6)
-                ft_table.alignment = WD_TABLE_ALIGNMENT.CENTER
-                _set_table_borders(ft_table)
-                ft_headers = ["Failed Test Case", "AC", "Test Name", "Expected", "Actual", "Failure Reason"]
-                ft_widths = [Inches(1.2), Inches(0.8), Inches(1.8), Inches(1.0), Inches(1.0), Inches(1.7)]
-                for j, (fh, fw) in enumerate(zip(ft_headers, ft_widths)):
-                    c = ft_table.cell(0, j)
-                    c.width = fw
-                    _set_cell_shading(c, "FFF1F2")
-                    p = c.paragraphs[0]
-                    r = p.add_run(fh)
-                    r.font.bold = True
-                    r.font.size = Pt(8.0)
-                    r.font.color.rgb = RGBColor(190, 18, 60)
-
                 if failed_tests:
+                    ft_table = doc.add_table(rows=len(failed_tests) + 1, cols=6)
+                    ft_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+                    _set_table_borders(ft_table)
+                    ft_headers = ["Failed Test Case", "AC", "Test Name", "Expected", "Actual", "Failure Reason"]
+                    ft_widths = [Inches(1.2), Inches(0.8), Inches(1.8), Inches(1.0), Inches(1.0), Inches(1.7)]
+                    for j, (fh, fw) in enumerate(zip(ft_headers, ft_widths)):
+                        c = ft_table.cell(0, j)
+                        c.width = fw
+                        _set_cell_shading(c, "FFF1F2")
+                        p = c.paragraphs[0]
+                        r = p.add_run(fh)
+                        r.font.bold = True
+                        r.font.size = Pt(8.0)
+                        r.font.color.rgb = RGBColor(190, 18, 60)
+
                     for fi, ftc in enumerate(failed_tests):
                         row_fi = fi + 1
                         ft_table.cell(row_fi, 0).paragraphs[0].add_run(ftc.get("test_key", f"TC-{fi+1}")).font.size = Pt(7.5)
@@ -1381,12 +1406,11 @@ def generate_docx_evidence(evidence_data, out_path=None, out_dir="./evidence_out
                         ft_table.cell(row_fi, 4).paragraphs[0].add_run(str(ftc.get("actual") or "AssertionError / Mock Mismatch")).font.size = Pt(7.5)
                         ft_table.cell(row_fi, 5).paragraphs[0].add_run(str(ftc.get("error_message") or ftc.get("failure_reason") or "Assertion failure during execution.")).font.size = Pt(7.5)
                 else:
-                    ft_table.cell(1, 0).paragraphs[0].add_run("TC-09 (Generated)").font.size = Pt(7.5)
-                    ft_table.cell(1, 1).paragraphs[0].add_run("AC-08").font.size = Pt(7.5)
-                    ft_table.cell(1, 2).paragraphs[0].add_run("test_ticket_update_nonexistent").font.size = Pt(7.5)
-                    ft_table.cell(1, 3).paragraphs[0].add_run("HTTP 404 Not Found").font.size = Pt(7.5)
-                    ft_table.cell(1, 4).paragraphs[0].add_run("HTTP 500 / AssertionError").font.size = Pt(7.5)
-                    ft_table.cell(1, 5).paragraphs[0].add_run("Target route raised unhandled exception on nonexistent ID instead of 404.").font.size = Pt(7.5)
+                    p_no_ft = doc.add_paragraph()
+                    r_no_ft = p_no_ft.add_run("✔ Detailed failure telemetry was not captured for individual user-story unit tests.")
+                    r_no_ft.font.size = Pt(8.0)
+                    r_no_ft.font.italic = True
+                    r_no_ft.font.color.rgb = RGBColor(100, 116, 139)
 
         # 3.4 Automated Test Suite Artifact Reference (Raw code omitted per client audit preference)
         files_written = code_gen_data.get("files_written") or []

@@ -16,6 +16,7 @@ from app.agents.base import BaseAgent
 from app.tools.api_runner.runner import get_runner
 from app.repositories.test_repo import save_execution_run_with_results
 from app.workflows.state_machine import CODE_VALIDATION
+from app.tools.document_generator.docx_generator import _ac_matches
 
 
 class ApiExecutorAgent(BaseAgent):
@@ -201,7 +202,12 @@ class ApiExecutorAgent(BaseAgent):
             matching_res = []
             for r in results:
                 t_key = r.get("test_key", "") or r.get("name", "")
-                if ac_key in t_key or any(ac_key == a for a in r.get("ac_keys", [])):
+                if (
+                    _ac_matches(ac_key, t_key)
+                    or _ac_matches(ac_key, r.get("ac_key"))
+                    or _ac_matches(ac_key, r.get("ac_id"))
+                    or any(_ac_matches(ac_key, a) for a in r.get("ac_keys", []))
+                ):
                     matching_res.append(r)
 
             if is_unreachable:
